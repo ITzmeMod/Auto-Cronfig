@@ -36,6 +36,12 @@ except ImportError:
 
 from engine.orchestrator import AutoCronfig, ScanMode
 from engine.memory import Memory
+from engine.security import (
+    validate_github_username, validate_github_repo,
+    sanitise_query, validate_output_path,
+    redact_token, print_startup_notice, check_config_permissions,
+    TOOL_NAME, TOOL_VERSION, TOOL_AUTHOR, TOOL_REPO,
+)
 from engine.notifier import Notifier
 
 
@@ -210,11 +216,28 @@ def cmd_scan(args):
     )
 
     output = getattr(args, "output", None)
+    if output:
+        try:
+            output = validate_output_path(output)
+        except ValueError as e:
+            print(f"  \033[91m✗ {e}\033[0m")
+            return
+
     report = None
     try:
         if args.repo:
+            try:
+                validate_github_repo(args.repo)
+            except ValueError as e:
+                print(f"  \033[91m✗ Invalid repo: {e}\033[0m")
+                return
             report = engine.run(args.repo, mode=mode)
         elif args.user:
+            try:
+                validate_github_username(args.user)
+            except ValueError as e:
+                print(f"  \033[91m✗ Invalid username: {e}\033[0m")
+                return
             report = engine.run(args.user, mode=mode)
         else:
             print("[!] Specify --repo or --user")
@@ -331,6 +354,11 @@ def cmd_global(args):
         return
 
     query = getattr(args, "query", None) or getattr(args, "global_query", None)
+    if query and query not in ("__ALL__",) and not query.startswith("__CAT:"):
+        query = sanitise_query(query)
+        if not query:
+            print("  \033[91m✗ Invalid search query\033[0m")
+            return
     t0 = _time.monotonic()
 
     try:
@@ -444,6 +472,17 @@ def cmd_vibe(args):
         print(f"  {c}[{h.severity}]{RST} {h.pattern_name}")
         print(f"    \033[2m{h.repo}/{h.file_path}\033[0m")
         print(f"    {h.url}")
+
+    # Sanitise platform name against known allowlist
+    _ALLOWED_PLATFORMS = {
+        None, "lovable","bolt","replit","base44","v0","cursor",
+        "windsurf","claude","copilot","devin","gptengineer",
+        "magic","env","repos",
+    }
+    if platform and platform not in _ALLOWED_PLATFORMS:
+        print(f"  \033[91m✗ Unknown platform: {platform!r}\033[0m")
+        print(f"  Allowed: {sorted(p for p in _ALLOWED_PLATFORMS if p)}")
+        return
 
     if continuous:
         interval = int(getattr(args, "interval", None) or 1800)

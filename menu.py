@@ -13,6 +13,18 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+# Security module — loaded lazily to avoid import at module level
+_SEC = None
+def _sec():
+    global _SEC
+    if _SEC is None:
+        try:
+            from engine import security as _SEC_mod
+            _SEC = _SEC_mod
+        except ImportError:
+            pass
+    return _SEC
+
 # ── Dependency check ──────────────────────────────────────────
 _missing = []
 try:
@@ -82,8 +94,18 @@ def load_cfg() -> dict:
     return dict(_DEFAULTS)
 
 def save_cfg(cfg: dict):
-    CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    CONFIG_FILE.write_text(json.dumps(cfg, indent=2))
+    from engine.security import secure_write_config
+    try:
+        secure_write_config(dict(cfg))
+    except Exception:
+        # Fallback: write normally
+        CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        CONFIG_FILE.write_text(json.dumps(cfg, indent=2))
+    # Restrict config file to owner-only (contains GitHub token)
+    try:
+        CONFIG_FILE.chmod(0o600)
+    except Exception as exc:
+        logger.debug("chmod config file: %s", exc)  # Windows best-effort
 
 def mask(s: str) -> str:
     if not s:
@@ -200,10 +222,28 @@ def menu_scan(cfg: dict):
 
     if target_type == "repo":
         target = ask("Repo  (owner/repo or URL):")
+        if not target:
+            return
+        sec = _sec()
+        if sec:
+            try:
+                sec.validate_github_repo(target)
+            except ValueError as e:
+                print(f"\n  {C.RED}✗ {e}{R}")
+                input(f"  {C.LIGHTBLACK_EX}↵ Enter…{R}")
+                return
     else:
         target = ask("GitHub username:")
-    if not target:
-        return
+        if not target:
+            return
+        sec = _sec()
+        if sec:
+            try:
+                sec.validate_github_username(target)
+            except ValueError as e:
+                print(f"\n  {C.RED}✗ {e}{R}")
+                input(f"  {C.LIGHTBLACK_EX}↵ Enter…{R}")
+                return
 
     mode = choose("Scan mode:", [
         questionary.Choice("  ⚡  Fast      — files only, no verify",       "fast"),
@@ -620,6 +660,10 @@ def menu_about():
 
 # ── MAIN MENU ─────────────────────────────────────────────────
 def main():
+    from engine.security import print_startup_notice, check_config_permissions
+    print_startup_notice()
+    for _w in check_config_permissions():
+        print(f"  {_w}")
     logging.basicConfig(level=logging.WARNING,
                         format="%(levelname)s %(name)s: %(message)s")
     cfg = load_cfg()

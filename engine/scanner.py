@@ -63,12 +63,17 @@ class RawFinding:
 
 
 def _make_headers(token: Optional[str]) -> Dict[str, str]:
+    try:
+        from .security import USER_AGENT
+    except ImportError:
+        USER_AGENT = "Auto-Cronfig/3.0.0 (+https://github.com/ITzmeMod/Auto-Cronfig)"
     headers = {
-        "Accept": "application/vnd.github.v3+json",
-        "User-Agent": "Auto-Cronfig/3.0",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": USER_AGENT,
     }
     if token:
-        headers["Authorization"] = f"token {token}"
+        headers["Authorization"] = f"Bearer {token}"  # Bearer > token (GitHub recommendation)
     return headers
 
 

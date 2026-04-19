@@ -1,0 +1,56 @@
+Auto-Cronfig
+Copyright (c) 2026 ITzmeMod (https://github.com/ITzmeMod)
+Repository: https://github.com/ITzmeMod/Auto-Cronfig
+
+This product is licensed under the MIT License.
+A copy of the MIT License is provided in the LICENSE file.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ATTRIBUTION REQUIREMENT
+-----------------------
+This software is open source (MIT License). You are free to use, modify,
+fork, and distribute it. However, you MUST retain the following in all
+copies and substantial portions of the software:
+
+  1. The copyright notice above
+  2. This NOTICE file (or a reference to it)
+  3. A link to the original repository in user-facing documentation
+
+When forking or building a derivative tool, please credit:
+  "Based on Auto-Cronfig by ITzmeMod (https://github.com/ITzmeMod/Auto-Cronfig)"
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+THIRD-PARTY COMPONENTS
+----------------------
+This software includes the following third-party open-source packages:
+
+Python (Apache 2.0)       https://python.org
+requests (Apache 2.0)     https://github.com/psf/requests
+colorama (BSD)            https://github.com/tartley/colorama
+rich (MIT)                https://github.com/Textualize/rich
+tqdm (MIT/MPL)            https://github.com/tqdm/tqdm
+questionary (MIT)         https://github.com/tmbo/questionary
+prompt_toolkit (BSD)      https://github.com/prompt-toolkit/python-prompt-toolkit
+jinja2 (BSD)              https://github.com/pallets/jinja
+beautifulsoup4 (MIT)      https://www.crummy.com/software/BeautifulSoup/
+httpx (BSD)               https://github.com/encode/httpx
+
+Node.js packages:
+axios (MIT)               https://github.com/axios/axios
+cheerio (MIT)             https://github.com/cheeriojs/cheerio
+p-limit (MIT)             https://github.com/sindresorhus/p-limit
+chalk (MIT)               https://github.com/chalk/chalk
+commander (MIT)           https://github.com/tj/commander.js
+node-cron (MIT)           https://github.com/node-cron/node-cron
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ETHICAL USE
+-----------
+This tool is designed for authorized security research and responsible
+disclosure. Use it only on repositories you own or have explicit permission
+to test. Misuse may violate GitHub Terms of Service and applicable laws.
+
+Report vulnerabilities found: see SECURITY.md

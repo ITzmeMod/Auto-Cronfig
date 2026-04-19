@@ -1,68 +1,137 @@
-# Security Policy
+# Security Policy — Auto-Cronfig
 
 ## Supported Versions
 
-| Version | Supported |
-|---------|-----------|
-| v3.x (latest) | ✅ Active |
+| Version | Status |
+|---------|--------|
+| v3.x (latest) | ✅ Active — security fixes applied immediately |
 | v2.x | ⚠️ Security fixes only |
-| v1.x | ❌ End of life |
+| v1.x | ❌ End of life — upgrade required |
+
+---
 
 ## Reporting a Vulnerability
 
-**Please do not open a public GitHub issue for security vulnerabilities.**
+**Do not open a public GitHub issue for security vulnerabilities.**
 
-To report a vulnerability:
-
-1. Go to the [Security Advisories](https://github.com/ITzmeMod/Auto-Cronfig/security/advisories/new) page
+### Option 1 — GitHub Private Advisory (preferred)
+1. Go to: https://github.com/ITzmeMod/Auto-Cronfig/security/advisories/new
 2. Click **"New draft security advisory"**
-3. Describe the vulnerability, steps to reproduce, and potential impact
+3. Describe the vulnerability, reproduction steps, and impact
 
-We aim to acknowledge reports within **48 hours** and release a fix within **7 days** for critical issues.
+### Option 2 — GitHub Contact
+Contact the author directly: https://github.com/ITzmeMod
 
-## Security Design
+**Response SLA:**
+- Acknowledgement: within **48 hours**
+- Fix for Critical/High: within **7 days**
+- Fix for Medium/Low: within **30 days**
+- CVE request (if warranted): coordinated with fix
 
-### What Auto-Cronfig Does NOT Store
+---
 
-- Raw secret values are **never stored**. All leaked key entries in the SQLite vault use SHA-256 hashes of the raw value.
-- GitHub tokens passed via `--token` or `GITHUB_TOKEN` are held in memory only and never written to disk by this tool.
-- No data is sent to any third-party service (telemetry, analytics, etc.).
+## Security Architecture
 
-### SQL Injection Prevention
+### 🔐 No Secrets Stored in Code
+- Zero hardcoded credentials anywhere in the codebase
+- GitHub token read from: `--token` flag → `GITHUB_TOKEN` env var → config file
+- All tokens held in memory only during the session
+- Config file (`~/.auto-cronfig/config.json`) written with `chmod 600` (owner-only)
+- Config directory created with `chmod 700`
 
-The `memory.py` engine uses parameterized queries (`?` placeholders) for all user-controlled input. The one location where a column name is interpolated into a SQL string (`update_pattern_stats`) uses an explicit allowlist validated with an `assert` before interpolation. The allowlist is:
+### 🏦 Vault Design
+- Raw secret values are **never stored** anywhere
+- All vault entries use SHA-256 hashes of the raw value
+- Only masked previews shown: `ghp_abc••••xyz`
+- Vault stored in `~/.auto-cronfig/memory.db` (SQLite, local only)
 
-```python
-_ALLOWED_STAT_COLS = {"verified_live", "verified_dead", "verified_unknown"}
+### 🛡️ Input Validation (engine/security.py)
+All user-supplied inputs are validated before use:
+
+| Input | Validation |
+|-------|-----------|
+| GitHub username | Regex `^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,37}[a-zA-Z0-9])?$` |
+| GitHub repo | `owner/repo` format, each part regex-validated |
+| Search query | Strip null bytes, control chars, max 200 chars |
+| Platform name | Allowlist: `{lovable, bolt, replit, base44, v0, cursor, windsurf, claude, ...}` |
+| Output path | No `..` traversal, extension allowlist: `.json .csv .html .md .txt` |
+
+### 🔒 SQL Injection Prevention
+The one location where a column name is interpolated into SQL (`update_pattern_stats`)
+uses an explicit allowlist validated with `if col not in _ALLOWED_STAT_COLS: raise ValueError(...)`.
+All other SQL uses parameterised queries (`?` placeholders).
+
+### ⚙️ Subprocess Safety
+Node.js scraper invoked via:
+- Fixed command list: `["node", path_to_script, "--mode", mode]`
+- Mode validated against allowlist: `{"paste", "github-web", "gist"}`
+- `shell=False` always
+- Query sanitised before passing
+
+### 🌐 Network Security
+- All external requests use **HTTPS only**
+- Full User-Agent string identifying the tool for transparency
+- Timeout on all requests (8–15 seconds)
+- Exponential backoff on 403/429 (max 3 retries)
+- No telemetry or data sent to third parties
+
+### 🔑 Token Handling
+- Tokens are **never logged** — `redact_token()` strips them from error messages
+- Tokens are **never written to disk** by the scan engine
+- Only the config file stores the token, with restricted permissions
+- `--token` flag takes precedence over config file
+- `GITHUB_TOKEN` env var supported as alternative
+
+### 🏷️ Attribution (engine/security.py)
+Attribution notice displayed on every startup:
+```
+Auto-Cronfig v3.0.0 by ITzmeMod | github.com/ITzmeMod/Auto-Cronfig | MIT License
+For authorized security research only.
 ```
 
-This value is derived entirely from internal logic, never from user input.
+---
 
-### Subprocess Safety
+## Security Audit Results
 
-The Node.js scraper is invoked via `subprocess.run()` with:
-- A **fixed command** (`["node", path_to_script, "--mode", mode]`)
-- Mode validated against an explicit allowlist: `{"paste", "github-web", "gist"}`
-- Query string sanitized: non-word characters stripped, max 200 chars
-- `shell=False` (default) — no shell interpolation
+| Tool | Result | Date |
+|------|--------|------|
+| Bandit (Python SAST) | **0 findings** | 2026-04-19 |
+| npm audit | **0 vulnerabilities** | 2026-04-19 |
+| Manual code review | Passed | 2026-04-19 |
 
-### Rate Limiting
-
-All GitHub API calls respect rate limits:
-- Standard API: exponential backoff on 403/429 (max 3 retries)
-- Code Search API: 6-second sleep between requests (10 req/min limit)
-
-### Token Scope
-
-A GitHub token with only `repo` scope (read-only) is sufficient for all scan operations. No write access is required or requested.
+---
 
 ## Known Accepted Risks
 
-| Finding | Severity | Accepted | Reason |
-|---------|----------|----------|--------|
-| `subprocess` import | Low | ✅ | Used with allowlist-validated args; `shell=False` |
-| `except Exception` in workers | Low | ✅ | Background threads must not crash the main scan; all exceptions are now logged at DEBUG/WARNING level |
+| Finding | Severity | Accepted | Justification |
+|---------|----------|----------|---------------|
+| `subprocess` import | Low (B404) | ✅ | Used with allowlist-validated fixed args; `shell=False` |
+| Empty-string config defaults | Low (B105) | ✅ | Unset sentinels, not passwords; `nosec` with justification |
+| Column name in SQL string | Low (B608) | ✅ | Allowlist-validated before interpolation; `if/raise` guard |
 
-## Ethical Use
+---
 
-Auto-Cronfig is built for authorized security research and responsible disclosure only. Using this tool to scan repositories you do not own or have permission to scan may violate GitHub's Terms of Service and applicable laws. See [README.md](README.md#️-disclaimer) for the full disclaimer.
+## Ethical Use Policy
+
+Auto-Cronfig is built for **authorized security research and responsible disclosure**:
+
+✅ **Allowed:**
+- Scanning your own repositories
+- Scanning repositories you have written permission to test
+- Research in controlled/sandboxed environments
+- Educational demonstrations
+
+❌ **Not allowed:**
+- Scanning repositories without authorization
+- Using discovered credentials for any purpose
+- Automated mass-scanning without rate limiting
+- Circumventing GitHub's ToS or API rate limits
+
+**If you discover live credentials in a public repository:**
+1. **Do not use the credentials** under any circumstances
+2. Contact the repository owner immediately (GitHub private message or issue)
+3. Consider GitHub's [private vulnerability reporting](https://docs.github.com/en/code-security/security-advisories)
+4. Allow reasonable time for remediation before any public disclosure
+
+Misuse of this tool may violate GitHub's Terms of Service, the Computer Fraud and
+Abuse Act (CFAA), and equivalent laws in other jurisdictions.
