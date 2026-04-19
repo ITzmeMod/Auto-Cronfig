@@ -267,6 +267,51 @@ GLOBAL_SEARCH_QUERIES = [
     "NEXTAUTH_SECRET filename:.env.local",
 ]
 
+# ── Category query map — focused lists per secret type ────────────────────────
+CATEGORY_QUERY_MAP = {
+    "AWS":    ["AKIA language:python", "AKIA filename:.env",
+               "aws_access_key_id filename:.env",
+               "AWS_SECRET_ACCESS_KEY filename:.env",
+               "AKIA language:javascript", "AKIA language:yaml"],
+    "GCP":    ["AIzaSy language:javascript", "AIzaSy language:python",
+               "AIzaSy filename:.env", "GOCSPX- language:python",
+               "GOOGLE_API_KEY filename:.env", "FIREBASE_API_KEY filename:.env",
+               "type service_account language:json"],
+    "AI":     ["OPENAI_API_KEY filename:.env", "OPENAI_API_KEY language:python",
+               "sk-ant-api language:python", "ANTHROPIC_API_KEY filename:.env",
+               "hf_ language:python", "HUGGINGFACE_TOKEN filename:.env",
+               "r8_ language:python", "gsk_ language:python",
+               "GROQ_API_KEY filename:.env", "MISTRAL_API_KEY filename:.env"],
+    "STRIPE": ["sk_live_ language:python", "sk_live_ language:javascript",
+               "sk_live_ filename:.env", "sk_test_ filename:.env",
+               "STRIPE_SECRET_KEY filename:.env",
+               "STRIPE_SECRET_KEY language:python", "whsec_ filename:.env"],
+    "GITHUB": ["ghp_ language:yaml", "ghp_ filename:.env",
+               "github_pat_ language:yaml", "GITHUB_TOKEN filename:.env",
+               "gho_ language:python", "glpat- language:yaml"],
+    "CHAT":   ["xoxb- language:python", "xoxb- filename:.env",
+               "SLACK_BOT_TOKEN filename:.env",
+               "DISCORD_TOKEN filename:.env", "DISCORD_BOT_TOKEN filename:.env",
+               "discord.com/api/webhooks language:javascript",
+               "TELEGRAM_BOT_TOKEN filename:.env",
+               "api.telegram.org/bot language:python"],
+    "DB":     ["mongodb+srv:// language:javascript", "mongodb+srv:// filename:.env",
+               "postgres:// language:python", "DATABASE_URL filename:.env",
+               "MONGO_URI filename:.env", "REDIS_URL filename:.env",
+               "SUPABASE_SERVICE_ROLE_KEY filename:.env"],
+    "KEYS":   ["-----BEGIN RSA PRIVATE KEY-----",
+               "-----BEGIN OPENSSH PRIVATE KEY-----",
+               "-----BEGIN EC PRIVATE KEY-----",
+               "-----BEGIN PRIVATE KEY-----",
+               "-----BEGIN PGP PRIVATE KEY BLOCK-----"],
+    "ENV":    ["API_KEY= filename:.env", "SECRET_KEY= filename:.env",
+               "ACCESS_TOKEN= filename:.env", "PASSWORD= filename:.env",
+               "DB_PASSWORD= filename:.env", "AUTH_TOKEN= filename:.env",
+               "SECRET= filename:.env", "CLIENT_SECRET= filename:.env",
+               "DB_PASSWORD filename:.env.production",
+               "SECRET_KEY filename:.env.production"],
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
 
 class GlobalScanner:

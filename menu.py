@@ -282,6 +282,8 @@ _GLOBAL_CATEGORIES = [
     questionary.Choice("  ◀   Back",                                      "back"),
 ]
 
+# _CATEGORY_QUERY_MAP is now in engine/global_scanner.py
+# Imported lazily in menu functions to avoid circular imports
 _CATEGORY_QUERY_MAP = {
     "AWS":    ["AKIA language:python", "AKIA filename:.env",
                "aws_access_key_id filename:.env",
@@ -327,6 +329,7 @@ _CATEGORY_QUERY_MAP = {
 }
 
 def menu_global(cfg: dict):
+    from engine.global_scanner import CATEGORY_QUERY_MAP as _CATEGORY_QUERY_MAP  # noqa
     hdr("🌐  GLOBAL SCAN", C.YELLOW)
     print(f"  {C.LIGHTBLACK_EX}Searches all of public GitHub for secrets.{R}")
     print(f"  {C.LIGHTBLACK_EX}200+ queries · every category covered.{R}\n")
@@ -365,24 +368,28 @@ def menu_global(cfg: dict):
     if fmt is None:
         return
 
-    # Build query arg — use first query of category for --global flag;
-    # for ALL or category, scanner runs full built-in list via orchestrator
-    if cat == "CUSTOM":
-        query_arg = custom_query
-    elif cat == "ALL":
-        query_arg = "__ALL__"   # sentinel — orchestrator runs full list
-    else:
-        # Use first query of the category as the entry point;
-        # scanner --global with a category prefix triggers category queries
-        query_arg = _CATEGORY_QUERY_MAP[cat][0]
+    # Route to scanner.py "global" subcommand — properly uses GlobalScanner
+    # ALL  → no --query flag → runs all 200+ built-in queries
+    # CATEGORY → runs focused query list for that category via __CATEGORY__ prefix
+    # CUSTOM  → passes custom search term as --query
 
-    args = ["--global", query_arg,
+    # Build args for: python scanner.py global [--query TERM] [--mode fast|safe] ...
+    args = ["global",
             "--token", cfg["token"],
-            "--max-results", limit]
-    if speed == "fast":
-        args += ["--mode", "fast"]
+            "--max-results", limit,
+            "--mode", speed]
+
+    if cat == "CUSTOM":
+        args += ["--query", custom_query]
+    elif cat != "ALL":
+        # Run every query in the category list sequentially via __CAT:NAME__ sentinel
+        # The sentinel tells cmd_global to use _CATEGORY_QUERY_MAP[cat]
+        args += ["--query", f"__CAT:{cat}__"]
+    # ALL → no --query → cmd_global runs full GLOBAL_SEARCH_QUERIES list
+
     if fmt != "none":
-        args += ["--output", f"global-{cat.lower()}.{fmt}"]
+        safe_cat = cat.lower().replace(":", "-")
+        args += ["--output", f"global-{safe_cat}.{fmt}"]
 
     hdr(f"🌐  SCANNING: {cat}", C.YELLOW)
     print(f"  {C.LIGHTBLACK_EX}Queries running… Ctrl+C to stop early.{R}\n")

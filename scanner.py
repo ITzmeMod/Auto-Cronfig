@@ -17,6 +17,7 @@ Usage:
 import sys
 import os
 import json
+from typing import List
 import argparse
 
 # ── Dependency check ──────────────────────────────────────────────────────────
@@ -212,11 +213,37 @@ def cmd_global(args):
 
     query = getattr(args, "query", None) or getattr(args, "global_query", None)
 
-    if not query or query == "__ALL__":
+    # ── Sentinel: __CAT:NAME__ — run focused category query list ─────────────
+    if query and query.startswith("__CAT:") and query.endswith("__"):
+        from engine.global_scanner import CATEGORY_QUERY_MAP
+        cat_name = query[6:-2]  # strip __CAT: and __
+        cat_queries = CATEGORY_QUERY_MAP.get(cat_name, [])
+        if not cat_queries:
+            print(f"  Unknown category: {cat_name!r}")
+            return
+        print(f"\n  Category: {cat_name} — {len(cat_queries)} queries — "
+              f"{'fast' if fast else 'safe'} mode\n")
+        all_findings: List[RawFinding] = []
+        for i, q in enumerate(cat_queries, 1):
+            pct = int(i / len(cat_queries) * 100)
+            bar = "█" * (pct // 5) + "░" * (20 - pct // 5)
+            sys.stdout.write(f"\r  [{bar}] {pct:3d}%  {i}/{len(cat_queries)}  {len(all_findings)} found  ")
+            sys.stdout.flush()
+            hits = gs.run_targeted(q, max_results=max_results)
+            for h in hits:
+                _show(h)
+            all_findings.extend(hits)
+        print()
+        findings = all_findings
+
+    # ── No query or __ALL__: run every built-in query ─────────────────────────
+    elif not query or query == "__ALL__":
         print(f"\n  Running {len(GLOBAL_SEARCH_QUERIES)} queries — "
               f"{'fast' if fast else 'safe'} mode\n")
         findings = gs.run_all_queries(
             max_per_query=max_results, callback=_show, fast=fast)
+
+    # ── Custom search term ────────────────────────────────────────────────────
     else:
         print(f"\n  Searching GitHub: {query!r}\n")
         findings = gs.run_targeted(query, max_results=max_results * 5)
@@ -455,12 +482,16 @@ Examples:
 
     # ── global ───────────────────────────────────────────────────────────────
     global_p = subparsers.add_parser("global", help="Auto global scan across GitHub")
-    global_p.add_argument("--query", metavar="TERM", help="Custom search query")
+    global_p.add_argument("--query", metavar="TERM", help="Custom search query (omit = run all 200+ built-in queries)")
     global_p.add_argument("--auto", action="store_true", help="Continuous auto-scan mode")
     global_p.add_argument("--interval", type=int, default=3600, metavar="SECONDS")
-    global_p.add_argument("--output", metavar="FILE", help="Save results to file")
+    global_p.add_argument("--output", metavar="FILE", help="Save results (.json|.csv|.html)")
     global_p.add_argument("--token", metavar="TOKEN")
     global_p.add_argument("--db-path", dest="db_path", metavar="PATH")
+    global_p.add_argument("--max-results", type=int, default=20, metavar="N",
+                          help="Max results per query (default 20)")
+    global_p.add_argument("--mode", choices=["fast", "safe"], default="fast",
+                          help="fast=parallel batches (default), safe=sequential")
     global_p.set_defaults(func=cmd_global)
 
     # ── watch ────────────────────────────────────────────────────────────────
@@ -530,7 +561,8 @@ def _legacy_main():
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--repo", metavar="OWNER/REPO")
     group.add_argument("--user", metavar="USERNAME")
-    group.add_argument("--global", metavar="QUERY", dest="global_query")
+    group.add_argument("--global", metavar="QUERY", dest="global_query",
+                       help="Global scan (omit value or use __ALL__ for all 200+ queries)")
     group.add_argument("--stats", action="store_true")
 
     parser.add_argument("--token", metavar="TOKEN")
@@ -570,12 +602,20 @@ def _legacy_main():
     elif args.user:
         report = engine.run(args.user, mode=mode)
     elif args.global_query:
-        report = engine.run(args.global_query, mode=ScanMode.GLOBAL)
+        # Route to cmd_global so ALL 200+ queries fire (not just one search term)
+        class _FakeArgs:
+            query       = args.global_query if args.global_query != "__ALL__" else None
+            global_query= args.global_query
+            auto        = False
+            interval    = 3600
+            output      = getattr(args, "output", None)
+            token       = getattr(args, "token", None)
+            db_path     = getattr(args, "db_path", None)
+            max_results = getattr(args, "max_results", 20)
+            mode        = getattr(args, "mode", "fast")
+        cmd_global(_FakeArgs())
     else:
         return
-
-    if args.output:
-        _save_output(report, args.output)
 
 
 if __name__ == "__main__":

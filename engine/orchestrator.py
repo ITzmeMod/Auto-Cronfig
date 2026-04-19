@@ -314,7 +314,14 @@ class AutoCronfig:
             raw_findings = self.scanner.scan_user(target)
             repos_scanned = len(set(f.repo for f in raw_findings))
         elif target_type == "global":
-            raw_findings = self.scanner.global_search(target)
+            # Use GlobalScanner.run_all_queries() — covers all 200+ patterns
+            # If target is a specific search term (not __ALL__), run targeted search
+            if target and target not in ("global", "__ALL__", ""):
+                raw_findings = self.global_scanner.run_targeted(
+                    target, max_results=100)
+            else:
+                raw_findings = self.global_scanner.run_all_queries(
+                    max_per_query=20, fast=True)
             repos_scanned = len(set(f.repo for f in raw_findings))
 
         print(f"[*] Phase 1 (file scan): {len(raw_findings)} findings")
