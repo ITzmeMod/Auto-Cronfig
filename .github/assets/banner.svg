@@ -1,0 +1,141 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="320" viewBox="0 0 1280 320">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0d1117;stop-opacity:1" />
+      <stop offset="50%" style="stop-color:#0f1923;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#0d1117;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#58a6ff;stop-opacity:1" />
+      <stop offset="50%" style="stop-color:#a371f7;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#f78166;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="textgrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#58a6ff" />
+      <stop offset="100%" style="stop-color:#a371f7" />
+    </linearGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="softglow">
+      <feGaussianBlur stdDeviation="8" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1280" height="320" fill="url(#bg)"/>
+
+  <!-- Grid pattern -->
+  <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+    <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#ffffff08" stroke-width="0.5"/>
+  </pattern>
+  <rect width="1280" height="320" fill="url(#grid)"/>
+
+  <!-- Top accent bar -->
+  <rect x="0" y="0" width="1280" height="3" fill="url(#accent)"/>
+
+  <!-- Glow orbs -->
+  <circle cx="160" cy="160" r="120" fill="#58a6ff" opacity="0.04"/>
+  <circle cx="1120" cy="160" r="100" fill="#a371f7" opacity="0.04"/>
+  <circle cx="640" cy="80" r="80" fill="#f78166" opacity="0.03"/>
+
+  <!-- Icon: magnifying glass -->
+  <g transform="translate(110, 100)" filter="url(#softglow)">
+    <!-- Outer ring -->
+    <circle cx="55" cy="55" r="42" fill="none" stroke="url(#accent)" stroke-width="5"/>
+    <!-- Inner fill -->
+    <circle cx="55" cy="55" r="34" fill="#58a6ff" opacity="0.08"/>
+    <!-- Handle -->
+    <line x1="87" y1="87" x2="115" y2="115" stroke="url(#accent)" stroke-width="8" stroke-linecap="round"/>
+    <!-- Lock icon inside -->
+    <rect x="42" y="50" width="26" height="20" rx="3" fill="none" stroke="#58a6ff" stroke-width="2.5" opacity="0.9"/>
+    <path d="M 46 50 L 46 44 Q 46 38 55 38 Q 64 38 64 44 L 64 50" fill="none" stroke="#58a6ff" stroke-width="2.5" stroke-linecap="round" opacity="0.9"/>
+    <circle cx="55" cy="60" r="3" fill="#58a6ff" opacity="0.9"/>
+  </g>
+
+  <!-- Main title -->
+  <text x="280" y="145"
+        font-family="'Segoe UI', 'SF Pro Display', 'Helvetica Neue', Arial, sans-serif"
+        font-size="72"
+        font-weight="800"
+        letter-spacing="-2"
+        fill="url(#textgrad)"
+        filter="url(#glow)">Auto-Cronfig</text>
+
+  <!-- Subtitle -->
+  <text x="282" y="190"
+        font-family="'Segoe UI', 'SF Pro Text', 'Helvetica Neue', Arial, sans-serif"
+        font-size="22"
+        font-weight="400"
+        letter-spacing="0.5"
+        fill="#8b949e">Enterprise-grade GitHub Secret Scanner &amp; Live Key Verifier</text>
+
+  <!-- Tag pills row -->
+  <!-- Pill 1: 208+ Patterns -->
+  <g transform="translate(282, 215)">
+    <rect rx="12" ry="12" width="148" height="28" fill="#58a6ff" opacity="0.12"/>
+    <rect rx="12" ry="12" width="148" height="28" fill="none" stroke="#58a6ff" stroke-width="0.8" opacity="0.4"/>
+    <text x="74" y="19" text-anchor="middle"
+          font-family="'Segoe UI', monospace" font-size="12" font-weight="600"
+          fill="#58a6ff">🔑 208+ Patterns</text>
+  </g>
+
+  <!-- Pill 2: Live Verification -->
+  <g transform="translate(442, 215)">
+    <rect rx="12" ry="12" width="162" height="28" fill="#a371f7" opacity="0.12"/>
+    <rect rx="12" ry="12" width="162" height="28" fill="none" stroke="#a371f7" stroke-width="0.8" opacity="0.4"/>
+    <text x="81" y="19" text-anchor="middle"
+          font-family="'Segoe UI', monospace" font-size="12" font-weight="600"
+          fill="#a371f7">⚡ Live Verification</text>
+  </g>
+
+  <!-- Pill 3: Deep Scan -->
+  <g transform="translate(616, 215)">
+    <rect rx="12" ry="12" width="120" height="28" fill="#f78166" opacity="0.12"/>
+    <rect rx="12" ry="12" width="120" height="28" fill="none" stroke="#f78166" stroke-width="0.8" opacity="0.4"/>
+    <text x="60" y="19" text-anchor="middle"
+          font-family="'Segoe UI', monospace" font-size="12" font-weight="600"
+          fill="#f78166">🔍 Deep Scan</text>
+  </g>
+
+  <!-- Pill 4: Android Ready -->
+  <g transform="translate(748, 215)">
+    <rect rx="12" ry="12" width="138" height="28" fill="#3fb950" opacity="0.12"/>
+    <rect rx="12" ry="12" width="138" height="28" fill="none" stroke="#3fb950" stroke-width="0.8" opacity="0.4"/>
+    <text x="69" y="19" text-anchor="middle"
+          font-family="'Segoe UI', monospace" font-size="12" font-weight="600"
+          fill="#3fb950">📱 Android Ready</text>
+  </g>
+
+  <!-- Pill 5: Open Source -->
+  <g transform="translate(898, 215)">
+    <rect rx="12" ry="12" width="120" height="28" fill="#e3b341" opacity="0.12"/>
+    <rect rx="12" ry="12" width="120" height="28" fill="none" stroke="#e3b341" stroke-width="0.8" opacity="0.4"/>
+    <text x="60" y="19" text-anchor="middle"
+          font-family="'Segoe UI', monospace" font-size="12" font-weight="600"
+          fill="#e3b341">⭐ Open Source</text>
+  </g>
+
+  <!-- Bottom scan line animation hint (static) -->
+  <line x1="0" y1="317" x2="1280" y2="317" stroke="#ffffff08" stroke-width="1"/>
+
+  <!-- Bottom right version tag -->
+  <text x="1250" y="308"
+        font-family="monospace" font-size="11" fill="#3d444d"
+        text-anchor="end">v3.0.0</text>
+
+  <!-- Decorative code snippet right side -->
+  <g transform="translate(1020, 95)" opacity="0.18">
+    <text font-family="'Courier New', monospace" font-size="11" fill="#58a6ff">
+      <tspan x="0" dy="0">$ python scanner.py \</tspan>
+      <tspan x="0" dy="16">    --user target \</tspan>
+      <tspan x="0" dy="16">    --mode deep \</tspan>
+      <tspan x="0" dy="16">    --output report.html</tspan>
+      <tspan x="0" dy="20" fill="#3fb950">[LIVE] GitHub Token found</tspan>
+      <tspan x="0" dy="14" fill="#f78166">[CRIT] AWS Key detected</tspan>
+      <tspan x="0" dy="14" fill="#a371f7">[HIGH] Stripe key verified</tspan>
+    </text>
+  </g>
+</svg>

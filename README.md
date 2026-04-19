@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="https://raw.githubusercontent.com/ITzmeMod/Auto-Cronfig/main/.github/assets/banner.png" alt="Auto-Cronfig Banner" width="100%">
+<img src="https://raw.githubusercontent.com/ITzmeMod/Auto-Cronfig/main/.github/assets/banner.svg" alt="Auto-Cronfig Banner" width="100%">
 
 # Auto-Cronfig
 
