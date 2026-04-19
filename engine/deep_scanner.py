@@ -6,12 +6,15 @@ to catch secrets that may have been added and removed.
 
 import time
 import base64
+import logging
 from typing import List, Optional, Dict, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
 
 from .scanner import RawFinding, _make_headers, _request_with_backoff, _scan_text_for_patterns
+
+logger = logging.getLogger(__name__)
 
 try:
     from tqdm import tqdm
@@ -87,8 +90,8 @@ class DeepScanner:
             for future in as_completed(futures):
                 try:
                     findings.extend(future.result())
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("[deep_scanner] commit worker error: %s", exc)
 
         return findings
 
@@ -215,8 +218,8 @@ class DeepScanner:
                             r = requests.get(raw_url, timeout=10)
                             if r.status_code == 200:
                                 content = r.text
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            logger.debug("[deep_scanner] fetch gist file error: %s", exc)
 
                 if content:
                     hits = _scan_text_for_patterns(
@@ -270,8 +273,8 @@ class DeepScanner:
                         memory=self.memory
                     )
                     findings.extend(hits)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("[deep_scanner] gist worker error: %s", exc)
 
         return findings
 
@@ -318,8 +321,8 @@ class DeepScanner:
                 try:
                     results = future.result()
                     all_findings.extend(results)
-                except Exception as e:
-                    pass  # Continue even if one scan method fails
+                except Exception as exc:
+                    logger.warning("[deep_scanner] scan method failed: %s", exc)
 
         # Deduplicate by (file_path, pattern_name, match_preview)
         seen = set()

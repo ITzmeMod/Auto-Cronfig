@@ -5,8 +5,10 @@ Searches GitHub code search for 50+ secret patterns across all public repos.
 
 import time
 import sys
+import logging
 from typing import List, Optional, Callable, Dict, Any
 
+logger = logging.getLogger(__name__)
 from .scanner import RawFinding, _make_headers, _request_with_backoff, _scan_text_for_patterns
 
 try:
@@ -157,10 +159,10 @@ class GlobalScanner:
                                     if output_callback:
                                         try:
                                             output_callback(hit)
-                                        except Exception:
-                                            pass
-                        except Exception:
-                            pass
+                                        except Exception as exc:
+                                            logger.debug("[global_scanner] callback error: %s", exc)
+                        except Exception as exc:
+                            logger.debug("[global_scanner] query item error: %s", exc)
 
                 fetched += 1
                 time.sleep(6)  # ~10 requests/min
@@ -197,8 +199,8 @@ class GlobalScanner:
             except KeyboardInterrupt:
                 print("\n[!] Global scan interrupted by user")
                 break
-            except Exception:
-                pass  # Continue to next query
+            except Exception as exc:
+                logger.debug("[global_scanner] query failed: %s", exc)
 
         return all_findings
 
@@ -230,8 +232,8 @@ class GlobalScanner:
                     try:
                         with open(output_path, "r") as f:
                             existing = json.load(f)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.debug("[global_scanner] load existing JSON error: %s", exc)
                     # Append new findings
                     for f in findings:
                         existing.append({

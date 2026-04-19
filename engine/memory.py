@@ -372,6 +372,13 @@ class Memory:
     # ── Pattern stats ─────────────────────────────────────────────────────────
 
     def update_pattern_stats(self, pattern_name: str, verified_status: str):
+        # Allowlist-based column mapping — prevents SQL injection.
+        # col is never derived from user input; it comes from a fixed dict.
+        _ALLOWED_STAT_COLS = {
+            "verified_live",
+            "verified_dead",
+            "verified_unknown",
+        }
         col_map = {
             "LIVE": "verified_live",
             "DEAD": "verified_dead",
@@ -382,16 +389,19 @@ class Memory:
         col = col_map.get(verified_status.upper())
         if col is None:
             return
-        self._conn.execute(
-            f"""
-            INSERT INTO pattern_stats (pattern_name, {col}, last_updated)
-            VALUES (?, 1, ?)
-            ON CONFLICT(pattern_name) DO UPDATE SET
-                {col} = {col} + 1,
-                last_updated = excluded.last_updated
-            """,
-            (pattern_name, self._now()),
+        # Safety assertion: col must be in the explicit allowlist before
+        # being interpolated into the SQL query string.
+        assert col in _ALLOWED_STAT_COLS, f"Unexpected column name: {col!r}"
+        # Column names come from a controlled allowlist, not user input — safe.
+        # col is allowlist-validated above — safe to interpolate  # nosec B608
+        sql = (  # nosec B608
+            f"INSERT INTO pattern_stats (pattern_name, {col}, last_updated) "  # nosec B608
+            f"VALUES (?, 1, ?) "
+            f"ON CONFLICT(pattern_name) DO UPDATE SET "
+            f"{col} = {col} + 1, "
+            f"last_updated = excluded.last_updated"
         )
+        self._conn.execute(sql, (pattern_name, self._now()))
         self._conn.commit()
 
     # ── File stats ────────────────────────────────────────────────────────────

@@ -5,6 +5,7 @@ tqdm progress for scan_user, and proper global_search rate limiting.
 """
 
 import re
+import logging
 import time
 import base64
 import threading
@@ -20,6 +21,7 @@ try:
 except ImportError:
     HAS_TQDM = False
 
+logger = logging.getLogger(__name__)
 from .patterns import PATTERNS, RISKY_FILENAMES, RISKY_CONTENT_SIGNALS
 
 # File extensions to always skip
@@ -250,8 +252,8 @@ class RepoScanner:
                     result = future.result()
                     with self._lock:
                         all_findings.extend(result)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.debug("[scanner] file scan worker error: %s", exc)
 
         return all_findings
 

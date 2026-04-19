@@ -7,12 +7,15 @@ Supports Node.js scraper subprocess integration.
 import json
 import time
 import datetime
-import subprocess
+import logging
+import subprocess  # nosec B404 — used with allowlist validation
 import shutil
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import List, Optional, Dict, Any
 from uuid import uuid4
+
+logger = logging.getLogger(__name__)
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .memory import Memory
@@ -244,9 +247,20 @@ class AutoCronfig:
         if not scraper_path.exists():
             return []
 
-        cmd = ["node", str(scraper_path), "--mode", mode]
+        # Validate mode against allowlist to prevent command injection.
+        _ALLOWED_MODES = {"paste", "github-web", "gist"}
+        if mode not in _ALLOWED_MODES:
+            logger.warning("[node-scraper] Rejected unknown mode: %r", mode)
+            return []
+        # Validate query: strip shell metacharacters, cap length.
+        safe_query: Optional[str] = None
         if query:
-            cmd += ["--query", query]
+            import re as _re
+            safe_query = _re.sub(r"[^\w\s\-_./:@]", "", str(query))[:200]
+
+        cmd = ["node", str(scraper_path), "--mode", mode]  # nosec B603
+        if safe_query:
+            cmd += ["--query", safe_query]
 
         try:
             result = subprocess.run(

@@ -4,10 +4,12 @@ Supports Telegram, Discord, Slack, and custom webhooks.
 """
 
 import os
+import logging
 import json
 import threading
 from typing import Optional, List, Dict, Any
 
+logger = logging.getLogger(__name__)
 import requests
 
 
@@ -121,8 +123,8 @@ class Notifier:
                 },
                 timeout=self._timeout,
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("[notifier] send failed: %s", exc)
 
     def _send_discord(self, message: str):
         """Send message via Discord Webhook."""
@@ -134,8 +136,8 @@ class Notifier:
                 json={"content": message[:2000]},
                 timeout=self._timeout,
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("[notifier] send failed: %s", exc)
 
     def _send_slack(self, message: str):
         """Send message via Slack Webhook."""
@@ -149,8 +151,8 @@ class Notifier:
                 json={"text": slack_msg[:3000]},
                 timeout=self._timeout,
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("[notifier] send failed: %s", exc)
 
     def _send_webhook(self, payload: Dict[str, Any]):
         """Send payload to custom webhook URL."""
@@ -163,8 +165,8 @@ class Notifier:
                 headers={"Content-Type": "application/json"},
                 timeout=self._timeout,
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("[notifier] send failed: %s", exc)
 
     def notify_scan_complete(self, report):
         """Send a scan completion summary notification."""
