@@ -22,6 +22,7 @@ from .memory import Memory
 from .scanner import RepoScanner, RawFinding
 from .deep_scanner import DeepScanner
 from .global_scanner import GlobalScanner
+from .vibe_scanner import VibeScanner, VIBE_SCAN_QUERIES
 from .verifier import verify, VerificationResult
 
 try:
@@ -59,6 +60,7 @@ class ScanMode(Enum):
     STANDARD = "standard"  # Files + verification
     DEEP = "deep"        # Files + commits + PRs + issues + gists + verification
     GLOBAL = "global"    # GitHub code search across all public repos
+    VIBE   = "vibe"     # New AI-scaffolded repos only (Lovable, Replit, Bolt…)
 
 
 @dataclass
@@ -214,6 +216,7 @@ class AutoCronfig:
         self.scanner = RepoScanner(token=token, workers=workers, memory=self.memory)
         self.deep_scanner = DeepScanner(token=token, workers=workers, memory=self.memory)
         self.global_scanner = GlobalScanner(token=token, memory=self.memory)
+        self.vibe_scanner   = VibeScanner(token=token, workers=workers, memory=self.memory)
         self.scan_id = uuid4().hex[:8]
 
     def _auto_detect_type(self, target: str) -> str:
@@ -292,7 +295,9 @@ class AutoCronfig:
         start_time = time.monotonic()
 
         # Determine target type
-        if mode == ScanMode.GLOBAL:
+        if mode == ScanMode.VIBE:
+            target_type = "vibe"
+        elif mode == ScanMode.GLOBAL:
             target_type = "global"
         else:
             target_type = self._auto_detect_type(target)
@@ -312,6 +317,11 @@ class AutoCronfig:
             repos_scanned = 1
         elif target_type == "user":
             raw_findings = self.scanner.scan_user(target)
+            repos_scanned = len(set(f.repo for f in raw_findings))
+        elif target_type == "vibe":
+            print("  Scanning new AI-scaffolded repos (Lovable·Bolt·Replit·Base44…)\n")
+            raw_findings = self.vibe_scanner.run_vibe_queries(
+                max_per_query=20, fast=True)
             repos_scanned = len(set(f.repo for f in raw_findings))
         elif target_type == "global":
             # Use GlobalScanner.run_all_queries() — covers all 200+ patterns

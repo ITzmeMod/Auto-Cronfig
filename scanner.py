@@ -259,6 +259,80 @@ def cmd_global(args):
 
     if output and findings:
         _save(findings, output)
+
+def cmd_vibe(args):
+    """Scan new AI-scaffolded repos (Lovable, Bolt, Replit, Base44, v0, Cursor…)."""
+    from engine.vibe_scanner import VibeScanner, VIBE_SCAN_QUERIES, VIBE_PLATFORM_SIGNALS
+
+    token       = _get_token(args)
+    db_path     = _get_db_path(args)
+    mem         = Memory(db_path)
+    fast        = getattr(args, "mode", "fast") != "safe"
+    max_results = int(getattr(args, "max_results", None) or 20)
+    output      = getattr(args, "output", None)
+    platform    = getattr(args, "platform", None)
+    days        = int(getattr(args, "days", None) or 7)
+    continuous  = getattr(args, "continuous", False)
+    repo_mode   = getattr(args, "repos", False)
+    vs          = VibeScanner(token=token, workers=8, memory=mem)
+
+    SEV = {"CRITICAL":"\033[91m","HIGH":"\033[93m","MEDIUM":"\033[33m","LOW":"\033[36m"}
+    RST = "\033[0m"
+
+    def _show(h):
+        c = SEV.get(h.severity, "")
+        print(f"  {c}[{h.severity}]{RST} {h.pattern_name}")
+        print(f"    {h.repo}/{h.file_path}")
+        print(f"    {h.url}")
+
+    if continuous:
+        interval = int(getattr(args, "interval", None) or 1800)
+        vs.run_continuous(interval_seconds=interval, output_path=output)
+        return
+
+    print(f"\n  \033[96mVibeScan\033[0m — targeting new AI-scaffolded repos\n")
+
+    if platform:
+        findings = vs.scan_platform(platform, max_per_query=max_results, callback=_show)
+    elif repo_mode:
+        findings = vs.search_new_vibe_repos(days=days, max_repos=50, callback=_show)
+    else:
+        print(f"  {len(VIBE_SCAN_QUERIES)} queries — {'fast' if fast else 'safe'} mode\n")
+        findings = vs.run_vibe_queries(max_per_query=max_results,
+                                       callback=_show, fast=fast)
+
+    crit = [f for f in findings if f.severity == "CRITICAL"]
+    high = [f for f in findings if f.severity == "HIGH"]
+    print(f"\n  ✓ {len(findings)} total  \033[91mCRIT:{len(crit)}\033[0m  "
+          f"\033[93mHIGH:{len(high)}\033[0m")
+
+    if output and findings:
+        ext = output.rsplit(".", 1)[-1].lower()
+        if ext == "json":
+            with open(output, "w") as fp:
+                json.dump([{
+                    "repo": f.repo, "file": f.file_path, "pattern": f.pattern_name,
+                    "severity": f.severity, "preview": f.match_preview, "url": f.url,
+                } for f in findings], fp, indent=2)
+        elif ext == "csv":
+            import csv as _csv
+            with open(output, "w", newline="") as fp:
+                w = _csv.DictWriter(fp, fieldnames=[
+                    "repo","file","pattern","severity","preview","url"])
+                w.writeheader()
+                for f in findings:
+                    w.writerow({"repo":f.repo,"file":f.file_path,
+                                "pattern":f.pattern_name,"severity":f.severity,
+                                "preview":f.match_preview,"url":f.url})
+        elif ext == "html":
+            from engine.exporter import Exporter
+            from engine.orchestrator import ScanReport
+            rpt = ScanReport(scan_id="vibe", target="vibe", target_type="vibe",
+                             duration_seconds=0, repos_scanned=0, files_scanned=0,
+                             findings=findings, live_keys=[], insights=[])
+            Exporter(rpt).to_html(output)
+        print(f"  ✓ Saved → {output}")
+
 def cmd_watch(args):
     """Manage watchlist."""
     db_path = _get_db_path(args)
@@ -468,7 +542,7 @@ Examples:
     scan_target = scan_p.add_mutually_exclusive_group(required=True)
     scan_target.add_argument("--repo", metavar="OWNER/REPO", help="Scan a repository")
     scan_target.add_argument("--user", metavar="USERNAME", help="Scan all repos for a user")
-    scan_p.add_argument("--mode", choices=["fast", "standard", "deep", "global"], default="standard")
+    scan_p.add_argument("--mode", choices=["fast", "standard", "deep", "global", "vibe"], default="standard")
     add_common(scan_p)
     scan_p.set_defaults(func=cmd_scan)
 
@@ -493,6 +567,28 @@ Examples:
     global_p.add_argument("--mode", choices=["fast", "safe"], default="fast",
                           help="fast=parallel batches (default), safe=sequential")
     global_p.set_defaults(func=cmd_global)
+
+
+    # ── vibe ─────────────────────────────────────────────────────────────────
+    vibe_p = subparsers.add_parser("vibe",
+        help="Scan new AI-scaffolded repos (Lovable, Bolt, Replit, Base44, v0…)")
+    vibe_p.add_argument("--platform", metavar="NAME",
+        help="Target one platform: lovable|bolt|replit|base44|v0|cursor|windsurf|claude")
+    vibe_p.add_argument("--repos", action="store_true",
+        help="Repo-search mode: find new vibe repos then scan files directly")
+    vibe_p.add_argument("--days", type=int, default=7, metavar="N",
+        help="Scan repos pushed in last N days (default 7)")
+    vibe_p.add_argument("--continuous", action="store_true",
+        help="Run continuously (repeat every --interval seconds)")
+    vibe_p.add_argument("--interval", type=int, default=1800, metavar="SECONDS",
+        help="Interval for continuous mode (default 1800)")
+    vibe_p.add_argument("--output", metavar="FILE",
+        help="Save results (.json|.csv|.html)")
+    vibe_p.add_argument("--token", metavar="TOKEN")
+    vibe_p.add_argument("--db-path", dest="db_path", metavar="PATH")
+    vibe_p.add_argument("--max-results", type=int, default=20, metavar="N")
+    vibe_p.add_argument("--mode", choices=["fast","safe"], default="fast")
+    vibe_p.set_defaults(func=cmd_vibe)
 
     # ── watch ────────────────────────────────────────────────────────────────
     watch_p = subparsers.add_parser("watch", help="Manage watchlist")
@@ -571,7 +667,7 @@ def _legacy_main():
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--max-results", type=int, default=100, dest="max_results")
     parser.add_argument("--db-path", metavar="PATH", default=None, dest="db_path")
-    parser.add_argument("--mode", choices=["fast", "standard", "deep", "global"], default="standard")
+    parser.add_argument("--mode", choices=["fast", "standard", "deep", "global", "vibe"], default="standard")
 
     args = parser.parse_args()
 
@@ -594,7 +690,7 @@ def _legacy_main():
     )
 
     mode_map = {"fast": ScanMode.FAST, "standard": ScanMode.STANDARD,
-                "deep": ScanMode.DEEP, "global": ScanMode.GLOBAL}
+                "deep": ScanMode.DEEP, "global": ScanMode.GLOBAL, "vibe": ScanMode.VIBE}
     mode = mode_map.get(args.mode, ScanMode.STANDARD)
 
     if args.repo:

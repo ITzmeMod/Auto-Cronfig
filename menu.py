@@ -499,6 +499,79 @@ def menu_settings(cfg: dict) -> dict:
 
     return cfg
 
+
+# ── VIBE SCAN menu ─────────────────────────────────────────────
+_VIBE_PLATFORMS = [
+    questionary.Choice("  🌍  ALL platforms  (100+ queries)",        "ALL"),
+    questionary.Choice("  💜  Lovable        (supabase + lovable)",  "lovable"),
+    questionary.Choice("  ⚡  Bolt.new       (stackblitz scaffold)", "bolt"),
+    questionary.Choice("  🔵  Replit         (replit.nix repos)",    "replit"),
+    questionary.Choice("  🟡  Base44         (base44.com apps)",     "base44"),
+    questionary.Choice("  🔺  v0 by Vercel   (vercel v0 scaffold)",  "v0"),
+    questionary.Choice("  🟢  Cursor         (.cursorrules repos)",  "cursor"),
+    questionary.Choice("  🌊  Windsurf       (.windsurfrules)",      "windsurf"),
+    questionary.Choice("  🤖  Claude-built   (anthropic scaffold)",  "claude"),
+    questionary.Choice("  📱  Expo/RN        (mobile vibe apps)",    "expo"),
+    questionary.Choice("  📦  New .env leaks (last 7 days .env)",    "env"),
+    questionary.Choice("  🔍  Repo mode      (search new repos, scan files)", "repos"),
+    questionary.Choice("  ◀   Back",                                 "back"),
+]
+
+def menu_vibe(cfg: dict):
+    hdr("🎯  VIBE SCAN — New AI Repos", C.MAGENTA)
+    print(f"  {C.LIGHTBLACK_EX}Targets repos from Lovable · Bolt · Replit{R}")
+    print(f"  {C.LIGHTBLACK_EX}Base44 · v0 · Cursor · Windsurf · Claude{R}")
+    print(f"  {C.LIGHTBLACK_EX}Prioritises repos pushed in last 7–30 days.{R}\n")
+
+    if not cfg.get("token"):
+        print(f"  {C.RED}✗ No GitHub token. Set one in Settings first.{R}")
+        input(f"\n  {C.LIGHTBLACK_EX}↵ Enter…{R}")
+        return
+
+    plat = choose("Platform / scope:", _VIBE_PLATFORMS)
+    if not plat or plat == "back":
+        return
+
+    days = ask("Scan repos pushed in last N days:", default="7")
+
+    speed = choose("Speed:", [
+        questionary.Choice("  ⚡  Fast   — parallel (recommended)", "fast"),
+        questionary.Choice("  🐢  Safe   — sequential",             "safe"),
+    ])
+    if not speed:
+        return
+
+    fmt = choose("Save report?", [
+        questionary.Choice("  🌐  HTML", "html"),
+        questionary.Choice("  📊  JSON", "json"),
+        questionary.Choice("  📋  CSV",  "csv"),
+        questionary.Choice("  ✗   Terminal only", "none"),
+    ])
+    if fmt is None:
+        return
+
+    # Build args for: python scanner.py vibe [options]
+    args = ["vibe",
+            "--token", cfg["token"],
+            "--days", days,
+            "--mode", speed,
+            "--max-results", "20"]
+
+    if plat == "repos":
+        args += ["--repos"]
+    elif plat == "env":
+        args += ["--platform", "env"]
+    elif plat != "ALL":
+        args += ["--platform", plat]
+    # ALL → no --platform → runs all 100+ vibe queries
+
+    if fmt != "none":
+        args += ["--output", f"vibe-{plat}.{fmt}"]
+
+    hdr(f"🎯  VIBE SCANNING: {plat.upper()}", C.MAGENTA)
+    print(f"  {C.LIGHTBLACK_EX}Targeting new AI-scaffolded repos…{R}\n")
+    run_scanner(*args)
+
 # ── HELP ─────────────────────────────────────────────────────
 def menu_help():
     hdr("❓  HELP", C.CYAN)
@@ -507,7 +580,10 @@ def menu_help():
         ("scan repo","scanner.py --repo owner/repo"),
         ("scan user","scanner.py --user username"),
         ("deep scan","scanner.py --repo x --mode deep"),
-        ("global",   "scanner.py --global AKIA"),
+        ("global",   "scanner.py global  (all 200+ queries)"),
+        ("vibe scan","scanner.py vibe --platform lovable"),
+        ("vibe all", "scanner.py vibe  (all platforms)"),
+        ("vibe cont","scanner.py vibe --continuous"),
         ("HTML out", "scanner.py --repo x --output r.html"),
         ("stats",    "scanner.py --stats"),
         ("fast mode","scanner.py --repo x --no-verify"),
@@ -564,6 +640,7 @@ def main():
                 questionary.Choice("  🔍  Scan         Scan repo / user",       "scan"),
                 questionary.Choice("  🔬  Deep Scan    Commits·PRs·Issues·Gists","deep"),
                 questionary.Choice("  🌐  Global       Search all of GitHub",    "global"),
+                questionary.Choice("  🎯  Vibe Scan    New AI repos (Lovable·Bolt·Replit)", "vibe"),
                 questionary.Choice("  🏦  Vault        Leaked keys vault",       "vault"),
                 questionary.Choice("  📊  Stats        Intelligence dashboard",  "stats"),
                 questionary.Choice("  ⚙   Settings     Token · workers · alerts","settings"),
@@ -581,6 +658,7 @@ def main():
         elif choice == "scan":       menu_scan(cfg)
         elif choice == "deep":       menu_deep(cfg)
         elif choice == "global":     menu_global(cfg)
+        elif choice == "vibe":       menu_vibe(cfg)
         elif choice == "vault":      menu_vault(cfg)
         elif choice == "stats":      menu_stats(cfg)
         elif choice == "settings":   cfg = menu_settings(cfg)
