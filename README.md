@@ -1,27 +1,60 @@
-# 🔍 Auto-Cronfig — GitHub Secret & Vulnerability Scanner
+# 🔍 Auto-Cronfig v2
 
-[![MIT License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Python](https://img.shields.io/badge/python-3.8+-blue.svg)](https://python.org)
-[![Open Source](https://img.shields.io/badge/open-source-brightgreen.svg)](https://github.com/ITzmeMod/Auto-Cronfig)
+> **GitHub Secret Scanner** — Concurrent scanning, live key verification, and a self-improving SQLite intelligence engine.
 
-> **Auto-Cronfig** is a free, open-source GitHub scanning tool that automatically detects leaked API keys, secrets, credentials, and common security vulnerabilities in public GitHub repositories.
-
----
-
-## 🚀 Features
-
-- 🔑 **API Key Detection** — AWS, GCP, Stripe, Twilio, Slack, Discord, GitHub tokens & more
-- 🔐 **Secret Leaks** — Passwords, private keys, JWT tokens, OAuth tokens
-- 🛡️ **Vulnerability Patterns** — SQL injection hints, hardcoded creds, `.env` file exposure
-- 📊 **Beautiful Reports** — Color-coded CLI output + optional JSON/HTML report export
-- ⚡ **Fast & Lightweight** — No heavy dependencies, runs anywhere Python runs
-- 🔄 **Cron-Ready** — Schedule scans to run automatically
-- 🌐 **Multi-Repo Scan** — Scan a single repo, a user's all repos, or a list from file
-- 💾 **Findings Export** — Save results to JSON for further processing
+[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 ---
 
-## 📦 Installation
+## Architecture
+
+```
+Auto-Cronfig v2
+│
+├── scanner.py              ← CLI entry point (backward compat)
+│
+├── engine/
+│   ├── __init__.py
+│   ├── patterns.py         ← 30+ pattern registry w/ severity & verifier refs
+│   ├── verifier.py         ← Real HTTP live key verification
+│   ├── memory.py           ← SQLite knowledge base (learns over time)
+│   ├── scanner.py          ← Concurrent GitHub file scanner
+│   └── orchestrator.py     ← Orchestration + reporting
+│
+├── tests/
+│   ├── test_verifier.py    ← Verifier unit tests (mocked HTTP)
+│   └── test_memory.py      ← Memory unit tests (SQLite :memory:)
+│
+└── requirements.txt
+```
+
+**Data flow:**
+
+```
+CLI args
+  │
+  ▼
+AutoCronfig.run(target)
+  │
+  ├─► RepoScanner ──────────► GitHub API (tree + file contents)
+  │        │                   (concurrent, 8 workers)
+  │        ▼
+  │   RawFindings (regex matches)
+  │        │
+  ├─► Verifier ─────────────► Live HTTP verification per service
+  │        │                   (concurrent, 10 workers)
+  │        ▼
+  │   EnrichedFindings (LIVE/DEAD/UNKNOWN)
+  │        │
+  ├─► Memory (SQLite) ──────► Persists findings, stats, patterns
+  │        │
+  └─► ScanReport ───────────► Console + JSON/HTML output
+```
+
+---
+
+## Installation
 
 ```bash
 git clone https://github.com/ITzmeMod/Auto-Cronfig.git
@@ -31,72 +64,134 @@ pip install -r requirements.txt
 
 ---
 
-## 🛠️ Usage
+## Usage
 
-### Scan a single repository
+### Scan a repository
 ```bash
+python scanner.py --repo owner/repo
 python scanner.py --repo https://github.com/owner/repo
 ```
 
-### Scan all repos of a GitHub user
+### Scan all public repos for a user
 ```bash
-python scanner.py --user someusername
+python scanner.py --user username
 ```
 
-### Scan with a GitHub token (higher rate limits)
+### Global GitHub code search
 ```bash
-python scanner.py --user someusername --token ghp_yourtoken
+python scanner.py --global "AKIA"
+python scanner.py --global "sk_live_" --max-results 50
 ```
 
-### Export report to JSON
+### Show intelligence dashboard
 ```bash
-python scanner.py --repo https://github.com/owner/repo --output report.json
+python scanner.py --stats
 ```
 
-### Run on a schedule (cron)
+### Export report
 ```bash
-# Edit crontab: crontab -e
-# Run every day at 9 AM
-0 9 * * * cd /path/to/Auto-Cronfig && python scanner.py --user target --output daily-report.json
+python scanner.py --repo owner/repo --output report.json
+python scanner.py --repo owner/repo --output report.html
+```
+
+### Full options
+```
+  --repo OWNER/REPO     Scan a specific repository
+  --user USERNAME       Scan all public repos for a user
+  --global QUERY        Global GitHub code search
+  --stats               Show memory stats and insights
+  --token TOKEN         GitHub personal access token (or set GITHUB_TOKEN env var)
+  --no-verify           Skip live key verification
+  --output FILE         Save report to .json or .html
+  --workers N           Concurrent workers (default: 8)
+  --max-results N       Max results for global search (default: 100)
+  --db-path PATH        Custom SQLite database path
 ```
 
 ---
 
-## 📋 What It Detects
+## Key Verification
 
-| Category | Examples |
+Auto-Cronfig v2 makes **real HTTP calls** to verify whether discovered secrets are actually live:
+
+| Service | Method | Endpoint |
+|---------|--------|----------|
+| GitHub Token | GET | `api.github.com/user` |
+| Stripe | GET | `api.stripe.com/v1/balance` |
+| Slack | POST | `slack.com/api/auth.test` |
+| Discord | GET | `discord.com/api/v10/users/@me` |
+| Telegram | GET | `api.telegram.org/bot{token}/getMe` |
+| SendGrid | GET | `api.sendgrid.com/v3/user/account` |
+| Mailgun | GET | `api.mailgun.net/v3/domains` |
+| Google API | GET | `maps.googleapis.com/...?key={key}` |
+
+Each result is one of: `LIVE` 🚨 | `DEAD` ✅ | `UNKNOWN` ⚠️ | `ERROR` 🔴
+
+Use `--no-verify` to skip verification and just scan.
+
+---
+
+## Memory & Learning System
+
+Auto-Cronfig stores all findings in a local SQLite database (`~/.auto-cronfig/memory.db`).
+
+### What it tracks
+- **findings** — every secret match, with verification status
+- **pattern_stats** — how often each pattern fires, live/dead ratios
+- **file_stats** — which file types yield the most secrets
+- **scan_history** — cumulative scan totals over time
+- **knowledge** — derived insights refreshed on every scan
+
+### How it gets smarter
+
+Over time, the engine learns which file extensions and secret patterns are most dangerous:
+
+1. **Extension prioritization** — Files with historically high finding rates are scanned first
+2. **Pattern performance** — You can see which patterns fire most and have the highest live rate
+3. **Intelligence insights** — Natural-language summaries generated from accumulated data
+
+Example insights after several scans:
+```
+• .env files have the highest finding rate at 62%
+• GitHub Personal Access Token has 34% live verification rate
+• Most common secret type: Generic API Key (147 found)
+• Lifetime: 12 scans, 4,821 files scanned, 89 total findings, 7 live keys confirmed
+```
+
+---
+
+## Detected Secret Types (30+)
+
+| Category | Patterns |
 |----------|---------|
-| **AWS** | Access keys, secret keys, session tokens |
-| **Google** | API keys, service account JSON |
-| **Stripe** | Live & test secret keys |
-| **Twilio** | Auth tokens, account SIDs |
-| **Slack** | Bot tokens, webhook URLs |
-| **Discord** | Bot tokens, webhook URLs |
-| **GitHub** | Personal access tokens |
-| **Generic** | Passwords in code, private keys, `.env` files |
-| **Database** | Connection strings with credentials |
-| **JWT** | Raw JWT tokens |
+| **Cloud** | AWS Access Key, AWS Secret Key, Google API Key, Google OAuth, Firebase URL, Heroku API Key |
+| **Payment** | Stripe Live/Test Key, Stripe Publishable Key, PayPal Client Secret |
+| **Communication** | Slack Bot/User Token, Slack Webhook, Discord Bot Token, Discord Webhook, Twilio Account SID/Auth Token, Telegram Bot Token |
+| **VCS** | GitHub PAT (Classic), GitHub OAuth Token, GitHub App Token, GitHub Fine-Grained PAT |
+| **Email** | SendGrid API Key, Mailgun API Key |
+| **Cryptography** | RSA Private Key, EC Private Key, OpenSSH Private Key, PGP Private Key |
+| **Authentication** | JWT Token |
+| **Database** | PostgreSQL, MySQL, MongoDB connection strings |
+| **Streaming** | Twitch OAuth Token |
+| **E-commerce** | Shopify Access Token, Shopify Private App Password |
+| **Generic** | Generic API Key, Generic Secret, Generic Password |
 
 ---
 
-## ⚠️ Disclaimer
+## Running Tests
 
-This tool is for **educational and ethical security research only**. Only scan repositories you own or have explicit permission to scan. The author is not responsible for misuse.
+```bash
+python -m pytest tests/ -v
+```
 
----
-
-## 📄 License
-
-MIT License — free to use, modify, and distribute. See [LICENSE](LICENSE).
+All tests use mocked HTTP calls and in-memory SQLite — no real API keys needed.
 
 ---
 
-## 🤝 Contributing
+## License
 
-PRs welcome! Open an issue first for major changes.
+MIT — see [LICENSE](LICENSE)
 
-1. Fork the repo
-2. Create your branch: `git checkout -b feature/my-feature`
-3. Commit changes: `git commit -m 'Add my feature'`
-4. Push: `git push origin feature/my-feature`
-5. Open a Pull Request
+---
+
+*Built with ❤️ by [ITzmeMod](https://github.com/ITzmeMod)*

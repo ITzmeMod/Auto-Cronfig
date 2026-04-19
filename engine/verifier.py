@@ -1,0 +1,387 @@
+"""
+Live key verification engine for Auto-Cronfig v2.
+Makes real HTTP calls to verify whether found secrets are active.
+"""
+
+import time
+import datetime
+from dataclasses import dataclass, field
+from typing import Optional
+
+import requests
+
+
+@dataclass
+class VerificationResult:
+    status: str  # "LIVE" | "DEAD" | "UNKNOWN" | "ERROR"
+    detail: str
+    checked_at: str = field(default_factory=lambda: datetime.datetime.utcnow().isoformat())
+    latency_ms: int = 0
+
+
+def _now_iso() -> str:
+    return datetime.datetime.utcnow().isoformat()
+
+
+def _verify_github_token(key: str) -> VerificationResult:
+    start = time.monotonic()
+    try:
+        resp = requests.get(
+            "https://api.github.com/user",
+            headers={
+                "Authorization": f"token {key}",
+                "Accept": "application/vnd.github.v3+json",
+            },
+            timeout=8,
+        )
+        latency = int((time.monotonic() - start) * 1000)
+        if resp.status_code == 200:
+            data = resp.json()
+            login = data.get("login", "unknown")
+            scopes = resp.headers.get("X-OAuth-Scopes", "")
+            return VerificationResult(
+                status="LIVE",
+                detail=f"GitHub user: {login}, scopes: {scopes or 'none'}",
+                checked_at=_now_iso(),
+                latency_ms=latency,
+            )
+        elif resp.status_code == 401:
+            return VerificationResult(
+                status="DEAD",
+                detail="GitHub token is invalid or revoked (401)",
+                checked_at=_now_iso(),
+                latency_ms=latency,
+            )
+        else:
+            return VerificationResult(
+                status="UNKNOWN",
+                detail=f"Unexpected status code: {resp.status_code}",
+                checked_at=_now_iso(),
+                latency_ms=latency,
+            )
+    except Exception as e:
+        return VerificationResult(
+            status="ERROR",
+            detail=f"Request failed: {type(e).__name__}: {e}",
+            checked_at=_now_iso(),
+            latency_ms=int((time.monotonic() - start) * 1000),
+        )
+
+
+def _verify_stripe_key(key: str) -> VerificationResult:
+    start = time.monotonic()
+    try:
+        resp = requests.get(
+            "https://api.stripe.com/v1/balance",
+            auth=(key, ""),
+            timeout=8,
+        )
+        latency = int((time.monotonic() - start) * 1000)
+        if resp.status_code == 200:
+            return VerificationResult(
+                status="LIVE",
+                detail="Stripe key is valid — /v1/balance returned 200",
+                checked_at=_now_iso(),
+                latency_ms=latency,
+            )
+        elif resp.status_code in (401, 403):
+            return VerificationResult(
+                status="DEAD",
+                detail=f"Stripe key rejected ({resp.status_code})",
+                checked_at=_now_iso(),
+                latency_ms=latency,
+            )
+        else:
+            return VerificationResult(
+                status="UNKNOWN",
+                detail=f"Unexpected status code: {resp.status_code}",
+                checked_at=_now_iso(),
+                latency_ms=latency,
+            )
+    except Exception as e:
+        return VerificationResult(
+            status="ERROR",
+            detail=f"Request failed: {type(e).__name__}: {e}",
+            checked_at=_now_iso(),
+            latency_ms=int((time.monotonic() - start) * 1000),
+        )
+
+
+def _verify_slack_token(key: str) -> VerificationResult:
+    start = time.monotonic()
+    try:
+        resp = requests.post(
+            "https://slack.com/api/auth.test",
+            headers={"Authorization": f"Bearer {key}"},
+            timeout=8,
+        )
+        latency = int((time.monotonic() - start) * 1000)
+        data = resp.json()
+        if data.get("ok") is True:
+            team = data.get("team", "unknown")
+            user = data.get("user", "unknown")
+            return VerificationResult(
+                status="LIVE",
+                detail=f"Slack token is live — team: {team}, user: {user}",
+                checked_at=_now_iso(),
+                latency_ms=latency,
+            )
+        else:
+            error = data.get("error", "unknown error")
+            return VerificationResult(
+                status="DEAD",
+                detail=f"Slack token invalid: {error}",
+                checked_at=_now_iso(),
+                latency_ms=latency,
+            )
+    except Exception as e:
+        return VerificationResult(
+            status="ERROR",
+            detail=f"Request failed: {type(e).__name__}: {e}",
+            checked_at=_now_iso(),
+            latency_ms=int((time.monotonic() - start) * 1000),
+        )
+
+
+def _verify_discord_token(key: str) -> VerificationResult:
+    # Strip "Bot " prefix if present for clean token
+    token = key.strip()
+    if token.lower().startswith("bot "):
+        token = token[4:]
+    start = time.monotonic()
+    try:
+        resp = requests.get(
+            "https://discord.com/api/v10/users/@me",
+            headers={"Authorization": f"Bot {token}"},
+            timeout=8,
+        )
+        latency = int((time.monotonic() - start) * 1000)
+        if resp.status_code == 200:
+            data = resp.json()
+            username = data.get("username", "unknown")
+            return VerificationResult(
+                status="LIVE",
+                detail=f"Discord bot token is live — username: {username}",
+                checked_at=_now_iso(),
+                latency_ms=latency,
+            )
+        elif resp.status_code == 401:
+            return VerificationResult(
+                status="DEAD",
+                detail="Discord token is invalid or revoked (401)",
+                checked_at=_now_iso(),
+                latency_ms=latency,
+            )
+        else:
+            return VerificationResult(
+                status="UNKNOWN",
+                detail=f"Unexpected status code: {resp.status_code}",
+                checked_at=_now_iso(),
+                latency_ms=latency,
+            )
+    except Exception as e:
+        return VerificationResult(
+            status="ERROR",
+            detail=f"Request failed: {type(e).__name__}: {e}",
+            checked_at=_now_iso(),
+            latency_ms=int((time.monotonic() - start) * 1000),
+        )
+
+
+def _verify_telegram_token(key: str) -> VerificationResult:
+    start = time.monotonic()
+    try:
+        resp = requests.get(
+            f"https://api.telegram.org/bot{key}/getMe",
+            timeout=8,
+        )
+        latency = int((time.monotonic() - start) * 1000)
+        data = resp.json()
+        if data.get("ok") is True:
+            bot = data.get("result", {})
+            username = bot.get("username", "unknown")
+            return VerificationResult(
+                status="LIVE",
+                detail=f"Telegram bot token is live — @{username}",
+                checked_at=_now_iso(),
+                latency_ms=latency,
+            )
+        else:
+            desc = data.get("description", "unknown error")
+            return VerificationResult(
+                status="DEAD",
+                detail=f"Telegram token invalid: {desc}",
+                checked_at=_now_iso(),
+                latency_ms=latency,
+            )
+    except Exception as e:
+        return VerificationResult(
+            status="ERROR",
+            detail=f"Request failed: {type(e).__name__}: {e}",
+            checked_at=_now_iso(),
+            latency_ms=int((time.monotonic() - start) * 1000),
+        )
+
+
+def _verify_sendgrid_key(key: str) -> VerificationResult:
+    start = time.monotonic()
+    try:
+        resp = requests.get(
+            "https://api.sendgrid.com/v3/user/account",
+            headers={"Authorization": f"Bearer {key}"},
+            timeout=8,
+        )
+        latency = int((time.monotonic() - start) * 1000)
+        if resp.status_code == 200:
+            data = resp.json()
+            account_type = data.get("type", "unknown")
+            return VerificationResult(
+                status="LIVE",
+                detail=f"SendGrid key is live — account type: {account_type}",
+                checked_at=_now_iso(),
+                latency_ms=latency,
+            )
+        elif resp.status_code in (401, 403):
+            return VerificationResult(
+                status="DEAD",
+                detail=f"SendGrid key rejected ({resp.status_code})",
+                checked_at=_now_iso(),
+                latency_ms=latency,
+            )
+        else:
+            return VerificationResult(
+                status="UNKNOWN",
+                detail=f"Unexpected status code: {resp.status_code}",
+                checked_at=_now_iso(),
+                latency_ms=latency,
+            )
+    except Exception as e:
+        return VerificationResult(
+            status="ERROR",
+            detail=f"Request failed: {type(e).__name__}: {e}",
+            checked_at=_now_iso(),
+            latency_ms=int((time.monotonic() - start) * 1000),
+        )
+
+
+def _verify_mailgun_key(key: str) -> VerificationResult:
+    start = time.monotonic()
+    try:
+        resp = requests.get(
+            "https://api.mailgun.net/v3/domains",
+            auth=("api", key),
+            timeout=8,
+        )
+        latency = int((time.monotonic() - start) * 1000)
+        if resp.status_code == 200:
+            return VerificationResult(
+                status="LIVE",
+                detail="Mailgun key is valid — /v3/domains returned 200",
+                checked_at=_now_iso(),
+                latency_ms=latency,
+            )
+        elif resp.status_code in (401, 403):
+            return VerificationResult(
+                status="DEAD",
+                detail=f"Mailgun key rejected ({resp.status_code})",
+                checked_at=_now_iso(),
+                latency_ms=latency,
+            )
+        else:
+            return VerificationResult(
+                status="UNKNOWN",
+                detail=f"Unexpected status code: {resp.status_code}",
+                checked_at=_now_iso(),
+                latency_ms=latency,
+            )
+    except Exception as e:
+        return VerificationResult(
+            status="ERROR",
+            detail=f"Request failed: {type(e).__name__}: {e}",
+            checked_at=_now_iso(),
+            latency_ms=int((time.monotonic() - start) * 1000),
+        )
+
+
+def _verify_google_api_key(key: str) -> VerificationResult:
+    start = time.monotonic()
+    try:
+        resp = requests.get(
+            "https://maps.googleapis.com/maps/api/geocode/json",
+            params={"address": "test", "key": key},
+            timeout=8,
+        )
+        latency = int((time.monotonic() - start) * 1000)
+        if resp.status_code == 200:
+            data = resp.json()
+            api_status = data.get("status", "")
+            if api_status == "REQUEST_DENIED":
+                return VerificationResult(
+                    status="DEAD",
+                    detail="Google API key rejected — REQUEST_DENIED",
+                    checked_at=_now_iso(),
+                    latency_ms=latency,
+                )
+            return VerificationResult(
+                status="LIVE",
+                detail=f"Google API key is valid — geocode status: {api_status}",
+                checked_at=_now_iso(),
+                latency_ms=latency,
+            )
+        else:
+            return VerificationResult(
+                status="UNKNOWN",
+                detail=f"Unexpected status code: {resp.status_code}",
+                checked_at=_now_iso(),
+                latency_ms=latency,
+            )
+    except Exception as e:
+        return VerificationResult(
+            status="ERROR",
+            detail=f"Request failed: {type(e).__name__}: {e}",
+            checked_at=_now_iso(),
+            latency_ms=int((time.monotonic() - start) * 1000),
+        )
+
+
+# Mapping from verifier ref name → function
+_VERIFIER_MAP = {
+    "github_token": _verify_github_token,
+    "stripe_key": _verify_stripe_key,
+    "slack_token": _verify_slack_token,
+    "discord_token": _verify_discord_token,
+    "telegram_token": _verify_telegram_token,
+    "sendgrid_key": _verify_sendgrid_key,
+    "mailgun_key": _verify_mailgun_key,
+    "google_api_key": _verify_google_api_key,
+}
+
+
+def verify(pattern_name: str, raw_match: str) -> VerificationResult:
+    """
+    Dispatch to the correct verifier based on pattern_name.
+    Returns UNKNOWN if no verifier is registered for the pattern.
+    Never raises.
+    """
+    from .patterns import PATTERNS
+
+    pattern_meta = PATTERNS.get(pattern_name, {})
+    verifier_ref = pattern_meta.get("verifier")
+
+    if not verifier_ref or verifier_ref not in _VERIFIER_MAP:
+        return VerificationResult(
+            status="UNKNOWN",
+            detail=f"No verifier available for pattern: {pattern_name}",
+            checked_at=_now_iso(),
+            latency_ms=0,
+        )
+
+    try:
+        return _VERIFIER_MAP[verifier_ref](raw_match.strip())
+    except Exception as e:
+        return VerificationResult(
+            status="ERROR",
+            detail=f"Verifier raised unexpected exception: {type(e).__name__}: {e}",
+            checked_at=_now_iso(),
+            latency_ms=0,
+        )
