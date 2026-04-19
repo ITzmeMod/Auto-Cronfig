@@ -451,10 +451,11 @@ class GlobalScanner:
         return all_findings
 
     # ── targeted search ────────────────────────────────────────────────────────
-    def run_targeted(self, query_term: str, max_results: int = 100) -> List[RawFinding]:
+    def run_targeted(self, query_term: str, max_results: int = 100,
+                     callback: Optional[Callable] = None) -> List[RawFinding]:
         """Search GitHub for a specific term or pattern."""
         self._seen = set()
-        return self._run_query(query_term, max_results=max_results)
+        return self._run_query(query_term, max_results=max_results, callback=callback)
 
     # ── continuous auto-scan ──────────────────────────────────────────────────
     def run_auto_scan(self, interval_seconds: int = 3600, output_path: Optional[str] = None):

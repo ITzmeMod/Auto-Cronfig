@@ -20,6 +20,18 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 logger = logging.getLogger(__name__)
 
+# Colour aliases — safe for non-TTY (Termux, piped output)
+try:
+    from colorama import Fore as _Fore
+    _RED    = _Fore.RED
+    _YELLOW = _Fore.YELLOW
+    _GREEN  = _Fore.GREEN
+    _CYAN   = _Fore.CYAN
+    _RESET  = "\033[0m"
+except ImportError:
+    _RED = _YELLOW = _GREEN = _CYAN = _RESET = ""
+
+
 from .scanner import RawFinding, _make_headers, _request_with_backoff, _scan_text_for_patterns
 
 try:
@@ -441,8 +453,8 @@ class VibeScanner:
                             sys.stdout.write(
                                 f"\r  [{bar}] {pct:3d}%  "
                                 f"{done}/{total} queries  "
-                                f"{C.RED if any(h.severity=='CRITICAL' for h in all_findings) else ''}"
-                                f"{len(all_findings)} found  \033[0m"
+                                f"{_RED if any(h.severity=='CRITICAL' for h in all_findings) else ''}"
+                                f"{len(all_findings)} found  {_RESET}"
                             )
                             sys.stdout.flush()
                         except Exception as exc:
@@ -545,9 +557,3 @@ class VibeScanner:
                 break
 
 
-# colour alias safe for non-tty
-try:
-    from colorama import Fore as C
-except ImportError:
-    class C:  # type: ignore
-        RED = YELLOW = GREEN = CYAN = ""

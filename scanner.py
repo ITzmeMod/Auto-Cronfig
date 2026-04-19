@@ -83,6 +83,109 @@ def _save_output(report, output_path: str):
 
 # ── Command handlers ──────────────────────────────────────────────────────────
 
+
+def _wrap_findings(findings):
+    """Wrap RawFinding objects so they look like EnrichedFinding to Exporter.
+    EnrichedFinding already has .raw attr — RawFinding does not.
+    """
+    class _W:
+        __slots__ = ("raw", "finding_id", "verification", "verified_status")
+        def __init__(self, f):
+            self.raw             = f
+            self.finding_id      = 0
+            self.verification    = None
+            self.verified_status = "PENDING"
+    result = []
+    for f in findings:
+        if hasattr(f, "raw"):
+            result.append(f)   # already EnrichedFinding
+        else:
+            result.append(_W(f))
+    return result
+
+
+def _save_findings_to_file(findings, path: str, scan_id: str, mem=None):
+    """Save findings list to file. Supports .json .csv .html .md.
+    Also saves all findings to the memory vault (deduplicating by hash).
+    Called on scan completion AND on Ctrl+C interrupt.
+    """
+    from engine.exporter import Exporter
+    from engine.orchestrator import ScanReport
+    import csv as _csv
+    import time as _t
+
+    # ── Always save to memory DB (vault) ──────────────────────────────────
+    if mem:
+        for f in findings:
+            try:
+                mem.save_leaked_key(
+                    scan_id=scan_id,
+                    repo=f.repo,
+                    file_path=f.file_path,
+                    pattern_name=f.pattern_name,
+                    raw_value=f.match if hasattr(f, "match") and f.match else f.match_preview,
+                    severity=f.severity,
+                    url=f.url,
+                    verified_status="PENDING",
+                    verified_detail="",
+                )
+            except Exception as _vault_exc:  # nosec B110
+                logger.debug("vault save error: %s", _vault_exc)
+
+    if not path:
+        return
+
+    ext = path.rsplit(".", 1)[-1].lower() if "." in path else "json"
+
+    if ext == "html":
+        wrapped = _wrap_findings(findings)
+        report = ScanReport(
+            scan_id=scan_id, target=scan_id, target_type="scan",
+            duration_seconds=0,
+            repos_scanned=len(set(
+                (f.raw.repo if hasattr(f, "raw") else f.repo) for f in findings)),
+            files_scanned=len(findings),
+            findings=wrapped, live_keys=[], insights=[],
+        )
+        Exporter(report).to_html(path)
+
+    elif ext == "csv":
+        with open(path, "w", newline="", encoding="utf-8") as fp:
+            w = _csv.DictWriter(fp, fieldnames=[
+                "repo", "file", "pattern", "severity", "preview", "url"])
+            w.writeheader()
+            for f in findings:
+                w.writerow({
+                    "repo": f.repo, "file": f.file_path,
+                    "pattern": f.pattern_name, "severity": f.severity,
+                    "preview": f.match_preview, "url": f.url,
+                })
+
+    elif ext == "md":
+        with open(path, "w", encoding="utf-8") as fp:
+            fp.write(f"# Auto-Cronfig Scan Report\n\n")
+            fp.write(f"**Scan ID:** {scan_id}  \n")
+            fp.write(f"**Findings:** {len(findings)}  \n\n")
+            fp.write("| Severity | Pattern | Repo | File | URL |\n")
+            fp.write("|----------|---------|------|------|-----|\n")
+            for f in findings:
+                fp.write(f"| {f.severity} | {f.pattern_name} | "
+                         f"{f.repo} | {f.file_path} | {f.url} |\n")
+
+    else:  # json (default)
+        with open(path, "w", encoding="utf-8") as fp:
+            json.dump({
+                "scan_id": scan_id,
+                "total": len(findings),
+                "generated_at": _t.strftime("%Y-%m-%dT%H:%M:%SZ", _t.gmtime()),
+                "findings": [{
+                    "repo": f.repo, "file": f.file_path,
+                    "pattern": f.pattern_name, "severity": f.severity,
+                    "preview": f.match_preview, "url": f.url,
+                } for f in findings],
+            }, fp, indent=2, ensure_ascii=False)
+
+
 def cmd_scan(args):
     """Scan a repo or user."""
     token = _get_token(args)
@@ -106,20 +209,27 @@ def cmd_scan(args):
         use_node=not getattr(args, "no_node", False),
     )
 
-    if args.repo:
-        report = engine.run(args.repo, mode=mode)
-    elif args.user:
-        report = engine.run(args.user, mode=mode)
-    else:
-        print("[!] Specify --repo or --user")
-        return
+    output = getattr(args, "output", None)
+    report = None
+    try:
+        if args.repo:
+            report = engine.run(args.repo, mode=mode)
+        elif args.user:
+            report = engine.run(args.user, mode=mode)
+        else:
+            print("[!] Specify --repo or --user")
+            return
+    except KeyboardInterrupt:
+        print("\n  \033[93m⚠ Scan interrupted — saving partial results…\033[0m")
 
-    if getattr(args, "output", None):
-        _save_output(report, args.output)
-
-    # Print rich table if available
-    from engine.exporter import Exporter
-    Exporter(report).print_rich_table()
+    if report:
+        if output:
+            _save_output(report, output)
+        # Print rich table if available
+        from engine.exporter import Exporter
+        Exporter(report).print_rich_table()
+    elif output:
+        print(f"  \033[33m⚠ No report generated (interrupted before completion)\033[0m")
 
 
 def cmd_deep(args):
@@ -140,70 +250,79 @@ def cmd_deep(args):
         notifier=notifier,
         use_node=not getattr(args, "no_node", False),
     )
-    report = engine.run(args.repo, mode=ScanMode.DEEP)
+    output = getattr(args, "output", None)
+    report = None
+    try:
+        report = engine.run(args.repo, mode=ScanMode.DEEP)
+    except KeyboardInterrupt:
+        print("\n  \033[93m⚠ Deep scan interrupted — saving partial results…\033[0m")
 
-    if getattr(args, "output", None):
-        _save_output(report, args.output)
+    if report and output:
+        _save_output(report, output)
+    elif report:
+        from engine.exporter import Exporter
+        Exporter(report).print_rich_table()
 
 
 def cmd_global(args):
-    """Global scan — all of public GitHub for any leaked secret."""
-    from engine.global_scanner import GlobalScanner, GLOBAL_SEARCH_QUERIES
+    """Global scan — all of public GitHub for any leaked secret.
+    Findings are saved to memory DB on each hit.
+    File is written incrementally — Ctrl+C still saves partial results.
+    """
+    import time as _time
+    import signal
+    from engine.global_scanner import GlobalScanner, GLOBAL_SEARCH_QUERIES, CATEGORY_QUERY_MAP
+    from engine.verifier import verify as _verify
 
     token       = _get_token(args)
     db_path     = _get_db_path(args)
     mem         = Memory(db_path)
-    fast        = getattr(args, "mode", "standard") == "fast"
+    fast        = getattr(args, "mode", "fast") != "safe"
     max_results = int(getattr(args, "max_results", None) or 20)
     output      = getattr(args, "output", None)
+    scan_id     = f"global-{int(_time.time())}"
     gs          = GlobalScanner(token=token, memory=mem)
 
-    SEV = {
-        "CRITICAL": "[91m", "HIGH": "[93m",
-        "MEDIUM":   "[33m", "LOW":  "[36m",
-    }
-    RST = "[0m"
+    SEV = {"CRITICAL": "\033[91m", "HIGH": "\033[93m",
+           "MEDIUM":   "\033[33m", "LOW":  "\033[36m"}
+    RST = "\033[0m"
 
-    def _show(h):
+    # ── Incremental output buffer ─────────────────────────────────────────
+    _all_findings = []
+    _output_path  = output
+
+    def _flush_output():
+        """Write current findings to file — called on completion and Ctrl+C."""
+        if not _output_path or not _all_findings:
+            return
+        try:
+            _save_findings_to_file(_all_findings, _output_path, scan_id, mem)
+            print(f"\n  \033[32m✓ Saved {len(_all_findings)} findings → {_output_path}\033[0m")
+        except Exception as exc:
+            print(f"\n  \033[31m✗ Save error: {exc}\033[0m")
+
+    def _on_sigint(sig, frame):
+        print(f"\n\n  \033[93m⚠ Scan interrupted — saving {len(_all_findings)} findings…\033[0m")
+        _flush_output()
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, _on_sigint)
+
+    def _on_hit(h):
+        """Called for each finding — save to memory + print immediately."""
+        _all_findings.append(h)
+        fid = mem.save_finding(
+            scan_id=scan_id, repo=h.repo, file_path=h.file_path,
+            pattern_name=h.pattern_name, match_preview=h.match_preview,
+            severity=h.severity, url=h.url,
+        )
+        mem.update_file_stats(h.file_path.rsplit(".", 1)[-1] if "." in h.file_path else "unknown",
+                              had_finding=True)
+        mem.update_pattern_stats(h.pattern_name, "UNKNOWN")
         c = SEV.get(h.severity, "")
         print(f"  {c}[{h.severity}]{RST} {h.pattern_name}")
-        print(f"    {h.repo}/{h.file_path}")
+        print(f"    \033[2m{h.repo}/{h.file_path}\033[0m")
         print(f"    {h.url}")
-
-    def _save(findings, path):
-        ext = path.rsplit(".", 1)[-1].lower()
-        if ext == "json":
-            with open(path, "w") as fp:
-                json.dump([{
-                    "repo": f.repo, "file": f.file_path,
-                    "pattern": f.pattern_name, "severity": f.severity,
-                    "preview": f.match_preview, "url": f.url,
-                } for f in findings], fp, indent=2)
-        elif ext == "csv":
-            import csv
-            with open(path, "w", newline="") as fp:
-                w = csv.DictWriter(fp, fieldnames=[
-                    "repo", "file", "pattern", "severity", "preview", "url"])
-                w.writeheader()
-                for f in findings:
-                    w.writerow({"repo": f.repo, "file": f.file_path,
-                                "pattern": f.pattern_name, "severity": f.severity,
-                                "preview": f.match_preview, "url": f.url})
-        elif ext == "html":
-            from engine.exporter import Exporter
-            from engine.orchestrator import ScanReport
-            report = ScanReport(
-                scan_id="global", target="global", target_type="global",
-                duration_seconds=0, repos_scanned=0, files_scanned=0,
-                findings=findings, live_keys=[], insights=[],
-            )
-            Exporter(report).to_html(path)
-        else:
-            with open(path, "w") as fp:
-                for f in findings:
-                    fp.write(f"[{f.severity}] {f.pattern_name} | "
-                             f"{f.repo}/{f.file_path} | {f.url}\n")
-        print(f"  \u2713 Saved → {path}")
 
     if getattr(args, "auto", False):
         gs.run_auto_scan(
@@ -212,56 +331,67 @@ def cmd_global(args):
         return
 
     query = getattr(args, "query", None) or getattr(args, "global_query", None)
+    t0 = _time.monotonic()
 
-    # ── Sentinel: __CAT:NAME__ — run focused category query list ─────────────
-    if query and query.startswith("__CAT:") and query.endswith("__"):
-        from engine.global_scanner import CATEGORY_QUERY_MAP
-        cat_name = query[6:-2]  # strip __CAT: and __
-        cat_queries = CATEGORY_QUERY_MAP.get(cat_name, [])
-        if not cat_queries:
-            print(f"  Unknown category: {cat_name!r}")
-            return
-        print(f"\n  Category: {cat_name} — {len(cat_queries)} queries — "
-              f"{'fast' if fast else 'safe'} mode\n")
-        all_findings: List[RawFinding] = []
-        for i, q in enumerate(cat_queries, 1):
-            pct = int(i / len(cat_queries) * 100)
-            bar = "█" * (pct // 5) + "░" * (20 - pct // 5)
-            sys.stdout.write(f"\r  [{bar}] {pct:3d}%  {i}/{len(cat_queries)}  {len(all_findings)} found  ")
-            sys.stdout.flush()
-            hits = gs.run_targeted(q, max_results=max_results)
-            for h in hits:
-                _show(h)
-            all_findings.extend(hits)
-        print()
-        findings = all_findings
+    try:
+        if query and query.startswith("__CAT:") and query.endswith("__"):
+            cat_name   = query[6:-2]
+            cat_queries = CATEGORY_QUERY_MAP.get(cat_name, [])
+            if not cat_queries:
+                print(f"  Unknown category: {cat_name!r}")
+                return
+            print(f"\n  Category: {cat_name}  {len(cat_queries)} queries  "
+                  f"{'fast' if fast else 'safe'}\n")
+            for i, q in enumerate(cat_queries, 1):
+                pct = int(i / len(cat_queries) * 100)
+                bar = "\u2588" * (pct // 5) + "\u2591" * (20 - pct // 5)
+                sys.stdout.write(
+                    f"\r  [{bar}] {pct:3d}%  {i}/{len(cat_queries)}  {len(_all_findings)} found  ")
+                sys.stdout.flush()
+                gs.run_targeted(q, max_results=max_results, callback=_on_hit)
+            print()
 
-    # ── No query or __ALL__: run every built-in query ─────────────────────────
-    elif not query or query == "__ALL__":
-        print(f"\n  Running {len(GLOBAL_SEARCH_QUERIES)} queries — "
-              f"{'fast' if fast else 'safe'} mode\n")
-        findings = gs.run_all_queries(
-            max_per_query=max_results, callback=_show, fast=fast)
+        elif not query or query == "__ALL__":
+            print(f"\n  Running {len(GLOBAL_SEARCH_QUERIES)} queries — "
+                  f"{'fast' if fast else 'safe'} mode\n")
+            gs._seen = set()
+            # Attach callback at GlobalScanner level
+            gs.run_all_queries(max_per_query=max_results, callback=_on_hit, fast=fast)
 
-    # ── Custom search term ────────────────────────────────────────────────────
-    else:
-        print(f"\n  Searching GitHub: {query!r}\n")
-        findings = gs.run_targeted(query, max_results=max_results * 5)
-        for h in findings:
-            _show(h)
+        else:
+            print(f"\n  Searching GitHub: {query!r}\n")
+            gs.run_targeted(query, max_results=max_results * 5, callback=_on_hit)
 
-    crit = [f for f in findings if f.severity == "CRITICAL"]
-    high = [f for f in findings if f.severity == "HIGH"]
-    print(f"\n  ✓ {len(findings)} total findings", end="")
-    if crit: print(f"  [91mCRITICAL:{len(crit)}[0m", end="")
-    if high: print(f"  [93mHIGH:{len(high)}[0m", end="")
-    print()
+    except KeyboardInterrupt:
+        pass  # SIGINT handler will flush
 
-    if output and findings:
-        _save(findings, output)
+    dur = _time.monotonic() - t0
+    crit = sum(1 for f in _all_findings if f.severity == "CRITICAL")
+    high = sum(1 for f in _all_findings if f.severity == "HIGH")
+    print(f"\n  \033[32m✓ {len(_all_findings)} findings  "
+          f"dur={dur:.0f}s\033[0m  "
+          f"\033[91mCRIT:{crit}\033[0m  \033[93mHIGH:{high}\033[0m")
+
+    mem.save_scan(scan_id=scan_id, target=query or "global",
+                  target_type="global",
+                  stats={"repos_scanned": len(set(f.repo for f in _all_findings)),
+                         "files_scanned": 0,
+                         "findings_count": len(_all_findings),
+                         "live_keys_count": 0,
+                         "duration_seconds": dur})
+
+    # Restore default SIGINT before flushing
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+    _flush_output()
+
 
 def cmd_vibe(args):
-    """Scan new AI-scaffolded repos (Lovable, Bolt, Replit, Base44, v0, Cursor…)."""
+    """VibeScan — new AI-scaffolded repos (Lovable, Bolt, Replit, Base44, v0…).
+    Findings saved to memory DB on each hit.
+    Ctrl+C saves partial results automatically.
+    """
+    import time as _time
+    import signal
     from engine.vibe_scanner import VibeScanner, VIBE_SCAN_QUERIES, VIBE_PLATFORM_SIGNALS
 
     token       = _get_token(args)
@@ -274,15 +404,45 @@ def cmd_vibe(args):
     days        = int(getattr(args, "days", None) or 7)
     continuous  = getattr(args, "continuous", False)
     repo_mode   = getattr(args, "repos", False)
+    scan_id     = f"vibe-{int(_time.time())}"
     vs          = VibeScanner(token=token, workers=8, memory=mem)
 
-    SEV = {"CRITICAL":"\033[91m","HIGH":"\033[93m","MEDIUM":"\033[33m","LOW":"\033[36m"}
+    SEV = {"CRITICAL": "\033[91m", "HIGH": "\033[93m",
+           "MEDIUM":   "\033[33m", "LOW":  "\033[36m"}
     RST = "\033[0m"
 
-    def _show(h):
+    _all_findings = []
+    _output_path  = output
+
+    def _flush_output():
+        if not _output_path or not _all_findings:
+            return
+        try:
+            _save_findings_to_file(_all_findings, _output_path, scan_id, mem)
+            print(f"\n  \033[32m✓ Saved {len(_all_findings)} findings → {_output_path}\033[0m")
+        except Exception as exc:
+            print(f"\n  \033[31m✗ Save error: {exc}\033[0m")
+
+    def _on_sigint(sig, frame):
+        print(f"\n\n  \033[93m⚠ VibeScan interrupted — saving {len(_all_findings)} findings…\033[0m")
+        _flush_output()
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, _on_sigint)
+
+    def _on_hit(h):
+        _all_findings.append(h)
+        fid = mem.save_finding(
+            scan_id=scan_id, repo=h.repo, file_path=h.file_path,
+            pattern_name=h.pattern_name, match_preview=h.match_preview,
+            severity=h.severity, url=h.url,
+        )
+        mem.update_file_stats(h.file_path.rsplit(".", 1)[-1] if "." in h.file_path else "unknown",
+                              had_finding=True)
+        mem.update_pattern_stats(h.pattern_name, "UNKNOWN")
         c = SEV.get(h.severity, "")
         print(f"  {c}[{h.severity}]{RST} {h.pattern_name}")
-        print(f"    {h.repo}/{h.file_path}")
+        print(f"    \033[2m{h.repo}/{h.file_path}\033[0m")
         print(f"    {h.url}")
 
     if continuous:
@@ -290,48 +450,38 @@ def cmd_vibe(args):
         vs.run_continuous(interval_seconds=interval, output_path=output)
         return
 
-    print(f"\n  \033[96mVibeScan\033[0m — targeting new AI-scaffolded repos\n")
+    t0 = _time.monotonic()
+    print(f"\n  \033[96mVibeScan\033[0m — new AI-scaffolded repos\n")
 
-    if platform:
-        findings = vs.scan_platform(platform, max_per_query=max_results, callback=_show)
-    elif repo_mode:
-        findings = vs.search_new_vibe_repos(days=days, max_repos=50, callback=_show)
-    else:
-        print(f"  {len(VIBE_SCAN_QUERIES)} queries — {'fast' if fast else 'safe'} mode\n")
-        findings = vs.run_vibe_queries(max_per_query=max_results,
-                                       callback=_show, fast=fast)
+    try:
+        if platform:
+            findings = vs.scan_platform(platform, max_per_query=max_results, callback=_on_hit)
+        elif repo_mode:
+            findings = vs.search_new_vibe_repos(days=days, max_repos=50, callback=_on_hit)
+        else:
+            print(f"  {len(VIBE_SCAN_QUERIES)} queries — {'fast' if fast else 'safe'} mode\n")
+            findings = vs.run_vibe_queries(max_per_query=max_results,
+                                           callback=_on_hit, fast=fast)
+    except KeyboardInterrupt:
+        findings = _all_findings
 
-    crit = [f for f in findings if f.severity == "CRITICAL"]
-    high = [f for f in findings if f.severity == "HIGH"]
-    print(f"\n  ✓ {len(findings)} total  \033[91mCRIT:{len(crit)}\033[0m  "
-          f"\033[93mHIGH:{len(high)}\033[0m")
+    dur = _time.monotonic() - t0
+    crit = sum(1 for f in _all_findings if f.severity == "CRITICAL")
+    high = sum(1 for f in _all_findings if f.severity == "HIGH")
+    print(f"\n  \033[32m✓ {len(_all_findings)} findings  dur={dur:.0f}s\033[0m  "
+          f"\033[91mCRIT:{crit}\033[0m  \033[93mHIGH:{high}\033[0m")
 
-    if output and findings:
-        ext = output.rsplit(".", 1)[-1].lower()
-        if ext == "json":
-            with open(output, "w") as fp:
-                json.dump([{
-                    "repo": f.repo, "file": f.file_path, "pattern": f.pattern_name,
-                    "severity": f.severity, "preview": f.match_preview, "url": f.url,
-                } for f in findings], fp, indent=2)
-        elif ext == "csv":
-            import csv as _csv
-            with open(output, "w", newline="") as fp:
-                w = _csv.DictWriter(fp, fieldnames=[
-                    "repo","file","pattern","severity","preview","url"])
-                w.writeheader()
-                for f in findings:
-                    w.writerow({"repo":f.repo,"file":f.file_path,
-                                "pattern":f.pattern_name,"severity":f.severity,
-                                "preview":f.match_preview,"url":f.url})
-        elif ext == "html":
-            from engine.exporter import Exporter
-            from engine.orchestrator import ScanReport
-            rpt = ScanReport(scan_id="vibe", target="vibe", target_type="vibe",
-                             duration_seconds=0, repos_scanned=0, files_scanned=0,
-                             findings=findings, live_keys=[], insights=[])
-            Exporter(rpt).to_html(output)
-        print(f"  ✓ Saved → {output}")
+    mem.save_scan(scan_id=scan_id, target=platform or "all-vibe",
+                  target_type="vibe",
+                  stats={"repos_scanned": len(set(f.repo for f in _all_findings)),
+                         "files_scanned": 0,
+                         "findings_count": len(_all_findings),
+                         "live_keys_count": 0,
+                         "duration_seconds": dur})
+
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+    _flush_output()
+
 
 def cmd_watch(args):
     """Manage watchlist."""
