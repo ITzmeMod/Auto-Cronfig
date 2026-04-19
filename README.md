@@ -215,22 +215,29 @@ You'll see the ASCII banner and a fully interactive menu:
 
 ### Quick Start
 ```bash
-# Launch interactive menu (recommended)
+# Interactive menu — no commands to memorize
 python menu.py
 
 # Or use CLI directly:
-# Scan a repository
-python scanner.py --repo owner/repo
 
-# Scan all public repos of a user
-python scanner.py --user username
+# Scan a repo or user
+python scanner.py scan --repo owner/repo --token ghp_xxx
+python scanner.py scan --user username   --token ghp_xxx
 
-# Scan with authentication (recommended)
-python scanner.py --user username --token ghp_yourtoken
+# VibeScan — new AI-scaffolded repos (highest live-key rate)
+python scanner.py vibe --token ghp_xxx
+python scanner.py vibe --platform lovable --token ghp_xxx
+python scanner.py vibe --days 1 --token ghp_xxx          # last 24h only
+
+# Global scan — all 200+ queries across GitHub
+python scanner.py global --token ghp_xxx
+
+# Deep scan — commits + PRs + issues + gists
+python scanner.py deep --repo owner/repo --token ghp_xxx
 
 # Or set env var once
 export GITHUB_TOKEN=ghp_yourtoken
-python scanner.py --user username
+python scanner.py vibe
 ```
 
 ### All Options
@@ -267,7 +274,8 @@ Output options:
 | `fast` | ⚡⚡⚡ | Repository files only, no verification | Quick sweep, large repos |
 | `standard` | ⚡⚡ | Files + live key verification | Default, everyday use |
 | `deep` | ⚡ | Files + commits + PRs + issues + gists + releases | Full forensic audit |
-| `global` | ⏱ | GitHub code search across all public repos | Finding leaks across all of GitHub |
+| `global` | ⏱ | 200+ queries across all of public GitHub | Wide coverage, any secret type |
+| `vibe` | ⚡⚡ | New AI-scaffolded repos (Lovable·Bolt·Replit·Base44·v0…) | **Highest live-key hit rate** |
 
 ### Examples
 
@@ -290,6 +298,42 @@ python scanner.py --user target --output findings.csv
 # Show intelligence dashboard
 python scanner.py --stats
 ```
+
+
+### VibeScan Examples
+
+```bash
+# Scan all vibe platforms — 103 queries, newest repos first
+python scanner.py vibe --token ghp_xxx
+
+# Target Lovable (highest volume — Supabase + OpenAI key leaks)
+python scanner.py vibe --platform lovable --token ghp_xxx
+
+# Target Bolt.new, Replit, Base44, v0, Cursor, Windsurf, Claude
+python scanner.py vibe --platform bolt    --token ghp_xxx
+python scanner.py vibe --platform replit  --token ghp_xxx
+python scanner.py vibe --platform base44  --token ghp_xxx
+python scanner.py vibe --platform v0      --token ghp_xxx
+python scanner.py vibe --platform cursor  --token ghp_xxx
+
+# Only repos pushed in last 24 hours
+python scanner.py vibe --days 1 --token ghp_xxx
+
+# Repo-discovery mode (search for repos first, then scan files)
+python scanner.py vibe --repos --days 3 --token ghp_xxx
+
+# Continuous — re-scan every 30 min, save cumulative JSON
+python scanner.py vibe --continuous --interval 1800 --token ghp_xxx --output live.json
+
+# Export findings as HTML
+python scanner.py vibe --token ghp_xxx --output vibe-report.html
+```
+
+> **Why VibeScan has the highest hit rate:**
+> Developers using AI coding tools (Lovable, Bolt, Replit, etc.) frequently paste real API keys
+> into AI prompts. The AI scaffolds `.env` files with those keys, which then get committed
+> to new public GitHub repos without review. These repos are < 90 days old and often have
+> live, unrotated secrets.
 
 ---
 

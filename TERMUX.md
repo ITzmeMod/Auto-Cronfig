@@ -168,29 +168,49 @@ Then choose your scan type from the menu. Each option walks you through:
 ```bash
 cd ~/Auto-Cronfig
 
-# Scan a single repository
-python scanner.py --repo owner/repo --token ghp_yourtoken
+# ── Interactive menu (easiest) ──────────────────────────
+python menu.py
 
-# Scan all public repos of a user
-python scanner.py --user someusername --token ghp_yourtoken
+# ── Scan a repo or user ─────────────────────────────────
+python scanner.py scan --repo owner/repo --token ghp_xxx
+python scanner.py scan --user username   --token ghp_xxx
 
-# Deep scan (commits, PRs, issues, gists)
-python scanner.py --repo owner/repo --mode deep --token ghp_yourtoken
+# ── Deep scan (commits + PRs + issues + gists) ──────────
+python scanner.py deep --repo owner/repo --token ghp_xxx
 
-# Global scan for AWS keys across GitHub
-python scanner.py --global AKIA --token ghp_yourtoken
+# ── Global scan — all of public GitHub ──────────────────
+# All 200+ built-in queries (recommended)
+python scanner.py global --token ghp_xxx
 
-# Save report as HTML
-python scanner.py --user someusername --output report.html
+# Target a specific secret type
+python scanner.py global --query "OPENAI_API_KEY filename:.env" --token ghp_xxx
 
-# Save report as JSON
-python scanner.py --user someusername --output report.json
+# ── VibeScan — NEW AI-scaffolded repos (highest hit rate) ──
+# Scan all vibe platforms (Lovable, Bolt, Replit, Base44…)
+python scanner.py vibe --token ghp_xxx
 
-# Fast scan (no key verification, maximum speed)
-python scanner.py --user someusername --mode fast --no-verify
+# Target one platform
+python scanner.py vibe --platform lovable --token ghp_xxx
+python scanner.py vibe --platform replit  --token ghp_xxx
+python scanner.py vibe --platform bolt    --token ghp_xxx
 
-# View intelligence dashboard
-python scanner.py --stats
+# Only repos pushed in last 24h
+python scanner.py vibe --days 1 --token ghp_xxx
+
+# Continuous vibe scan (re-runs every 30 min)
+python scanner.py vibe --continuous --interval 1800 --token ghp_xxx --output live.json
+
+# ── Save reports ─────────────────────────────────────────
+python scanner.py scan --repo owner/repo --output report.html
+python scanner.py vibe --token ghp_xxx   --output vibe.json
+python scanner.py scan --user username   --output report.csv
+
+# ── Other ────────────────────────────────────────────────
+# View intelligence dashboard & lifetime stats
+python scanner.py stats
+
+# Fast scan (skip key verification)
+python scanner.py scan --user username --mode fast --no-verify
 ```
 
 ---
@@ -241,13 +261,13 @@ Add one of these lines (press `i` to insert, `Esc` then `:wq` to save in nano/vi
 
 ```bash
 # Daily scan at 9 AM — save HTML report
-0 9 * * * cd ~/Auto-Cronfig && python scanner.py --user YOUR_USERNAME --token YOUR_TOKEN --output ~/scan-$(date +\%Y\%m\%d).html
+0 9 * * * cd ~/Auto-Cronfig && python scanner.py vibe --token YOUR_TOKEN --output ~/vibe-$(date +\%Y\%m\%d).json
 
 # Every 6 hours — fast scan
-0 */6 * * * cd ~/Auto-Cronfig && python scanner.py --user YOUR_USERNAME --token YOUR_TOKEN --no-verify --output ~/scan-latest.json
+0 */6 * * * cd ~/Auto-Cronfig && python scanner.py vibe --token YOUR_TOKEN --mode fast --output ~/vibe-latest.json
 
 # Weekly deep scan on Sunday at midnight
-0 0 * * 0 cd ~/Auto-Cronfig && python scanner.py --user YOUR_USERNAME --token YOUR_TOKEN --mode deep --output ~/deep-scan-$(date +\%Y\%m\%d).html
+0 0 * * 0 cd ~/Auto-Cronfig && python scanner.py global --token YOUR_TOKEN --output ~/global-$(date +\%Y\%m\%d).html
 ```
 
 ---
@@ -370,18 +390,30 @@ Save this for easy access:
   cd ~/Auto-Cronfig && python menu.py
 
   QUICK SCANS (CLI)
-  python scanner.py --repo owner/repo
-  python scanner.py --user username
-  python scanner.py --global AKIA
-  python scanner.py --stats
+  python scanner.py scan --repo owner/repo
+  python scanner.py scan --user username
+  python scanner.py global --token ghp_xxx
+  python scanner.py vibe --token ghp_xxx
+  python scanner.py vibe --platform lovable
+  python scanner.py vibe --days 1
+  python scanner.py stats
+
+  COMMANDS
+  scan   --repo/--user   Scan repo or user
+  deep   --repo          Full history scan
+  global                 200+ queries GitHub-wide
+  vibe   --platform X    New AI repos (best hit rate)
+  stats                  Dashboard & insights
 
   COMMON FLAGS
-  --token ghp_xxx      GitHub token
-  --workers 4          Thread count
-  --mode fast          No verification
-  --mode deep          Full history scan
-  --output report.html Save HTML report
-  --no-verify          Skip key checks
+  --token ghp_xxx        GitHub token (required)
+  --workers 4            Thread count (mobile: 4)
+  --mode fast            No verification, fastest
+  --mode deep            Full history scan
+  --days 1               Last 24h repos (vibe)
+  --output report.html   Save HTML report
+  --no-verify            Skip live key checks
+  --continuous           Loop forever (vibe/global)
 
   UPDATE
   cd ~/Auto-Cronfig && git pull
