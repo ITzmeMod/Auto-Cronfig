@@ -146,39 +146,92 @@ def cmd_deep(args):
 
 
 def cmd_global(args):
-    """Auto global scan across GitHub."""
-    from engine.global_scanner import GlobalScanner
+    """Global scan — all of public GitHub for any leaked secret."""
+    from engine.global_scanner import GlobalScanner, GLOBAL_SEARCH_QUERIES
 
-    token = _get_token(args)
-    db_path = _get_db_path(args)
-    mem = Memory(db_path)
-    gs = GlobalScanner(token=token, memory=mem)
+    token       = _get_token(args)
+    db_path     = _get_db_path(args)
+    mem         = Memory(db_path)
+    fast        = getattr(args, "mode", "standard") == "fast"
+    max_results = int(getattr(args, "max_results", None) or 20)
+    output      = getattr(args, "output", None)
+    gs          = GlobalScanner(token=token, memory=mem)
+
+    SEV = {
+        "CRITICAL": "[91m", "HIGH": "[93m",
+        "MEDIUM":   "[33m", "LOW":  "[36m",
+    }
+    RST = "[0m"
+
+    def _show(h):
+        c = SEV.get(h.severity, "")
+        print(f"  {c}[{h.severity}]{RST} {h.pattern_name}")
+        print(f"    {h.repo}/{h.file_path}")
+        print(f"    {h.url}")
+
+    def _save(findings, path):
+        ext = path.rsplit(".", 1)[-1].lower()
+        if ext == "json":
+            with open(path, "w") as fp:
+                json.dump([{
+                    "repo": f.repo, "file": f.file_path,
+                    "pattern": f.pattern_name, "severity": f.severity,
+                    "preview": f.match_preview, "url": f.url,
+                } for f in findings], fp, indent=2)
+        elif ext == "csv":
+            import csv
+            with open(path, "w", newline="") as fp:
+                w = csv.DictWriter(fp, fieldnames=[
+                    "repo", "file", "pattern", "severity", "preview", "url"])
+                w.writeheader()
+                for f in findings:
+                    w.writerow({"repo": f.repo, "file": f.file_path,
+                                "pattern": f.pattern_name, "severity": f.severity,
+                                "preview": f.match_preview, "url": f.url})
+        elif ext == "html":
+            from engine.exporter import Exporter
+            from engine.orchestrator import ScanReport
+            report = ScanReport(
+                scan_id="global", target="global", target_type="global",
+                duration_seconds=0, repos_scanned=0, files_scanned=0,
+                findings=findings, live_keys=[], insights=[],
+            )
+            Exporter(report).to_html(path)
+        else:
+            with open(path, "w") as fp:
+                for f in findings:
+                    fp.write(f"[{f.severity}] {f.pattern_name} | "
+                             f"{f.repo}/{f.file_path} | {f.url}\n")
+        print(f"  \u2713 Saved → {path}")
 
     if getattr(args, "auto", False):
-        interval = getattr(args, "interval", 3600)
-        output = getattr(args, "output", None)
-        gs.run_auto_scan(interval_seconds=interval, output_path=output)
-    elif getattr(args, "query", None):
-        findings = gs.search_github_code(args.query, max_results=100)
-        print(f"\n[✓] Found {len(findings)} findings for query: {args.query}")
-        for f in findings:
-            print(f"  [{f.severity}] {f.pattern_name} — {f.file_path}")
-            print(f"    {f.url}")
-        if getattr(args, "output", None):
-            out = [{"repo": f.repo, "file": f.file_path, "pattern": f.pattern_name,
-                    "severity": f.severity, "preview": f.match_preview, "url": f.url}
-                   for f in findings]
-            with open(args.output, "w") as fp:
-                json.dump(out, fp, indent=2)
-            print(f"[✓] Saved to {args.output}")
+        gs.run_auto_scan(
+            interval_seconds=getattr(args, "interval", 3600),
+            output_path=output)
+        return
+
+    query = getattr(args, "query", None) or getattr(args, "global_query", None)
+
+    if not query or query == "__ALL__":
+        print(f"\n  Running {len(GLOBAL_SEARCH_QUERIES)} queries — "
+              f"{'fast' if fast else 'safe'} mode\n")
+        findings = gs.run_all_queries(
+            max_per_query=max_results, callback=_show, fast=fast)
     else:
-        print("[*] Running all built-in global search queries...")
-        findings = gs.run_all_queries(max_per_query=20)
-        print(f"\n[✓] Total: {len(findings)} findings across all queries")
-        for f in findings:
-            print(f"  [{f.severity}] {f.pattern_name} — {f.repo}/{f.file_path}")
+        print(f"\n  Searching GitHub: {query!r}\n")
+        findings = gs.run_targeted(query, max_results=max_results * 5)
+        for h in findings:
+            _show(h)
 
+    crit = [f for f in findings if f.severity == "CRITICAL"]
+    high = [f for f in findings if f.severity == "HIGH"]
+    print(f"\n  ✓ {len(findings)} total findings", end="")
+    if crit: print(f"  [91mCRITICAL:{len(crit)}[0m", end="")
+    if high: print(f"  [93mHIGH:{len(high)}[0m", end="")
+    print()
 
+    if output and findings:
+        _save(findings, output)
 def cmd_watch(args):
     """Manage watchlist."""
     db_path = _get_db_path(args)

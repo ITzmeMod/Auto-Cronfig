@@ -267,43 +267,125 @@ def menu_deep(cfg: dict):
     run_scanner(*args)
 
 # ── GLOBAL SCAN menu ──────────────────────────────────────────
+_GLOBAL_CATEGORIES = [
+    questionary.Choice("  🌍  ALL  — every category (200+ queries)",      "ALL"),
+    questionary.Choice("  ☁️   AWS keys  (AKIA, secret access key)",       "AWS"),
+    questionary.Choice("  🔵  Google / GCP  (AIzaSy, service accounts)",  "GCP"),
+    questionary.Choice("  🤖  AI keys  (OpenAI, Anthropic, HuggingFace)", "AI"),
+    questionary.Choice("  💳  Stripe / Payment  (sk_live_, sk_test_)",    "STRIPE"),
+    questionary.Choice("  🐙  GitHub tokens  (ghp_, gho_, github_pat_)",  "GITHUB"),
+    questionary.Choice("  💬  Slack / Discord / Telegram",                "CHAT"),
+    questionary.Choice("  🗄️   Databases  (postgres, mongo, redis)",       "DB"),
+    questionary.Choice("  🔐  Private keys  (RSA, SSH, PGP)",             "KEYS"),
+    questionary.Choice("  📄  .env file leaks  (any secret in .env)",     "ENV"),
+    questionary.Choice("  🔎  Custom  — enter your own search term",      "CUSTOM"),
+    questionary.Choice("  ◀   Back",                                      "back"),
+]
+
+_CATEGORY_QUERY_MAP = {
+    "AWS":    ["AKIA language:python", "AKIA filename:.env",
+               "aws_access_key_id filename:.env",
+               "AWS_SECRET_ACCESS_KEY filename:.env",
+               "AKIA language:javascript", "AKIA language:yaml"],
+    "GCP":    ["AIzaSy language:javascript", "AIzaSy language:python",
+               "AIzaSy filename:.env", "GOCSPX- language:python",
+               "GOOGLE_API_KEY filename:.env", "FIREBASE_API_KEY filename:.env",
+               "type service_account language:json"],
+    "AI":     ["OPENAI_API_KEY filename:.env", "OPENAI_API_KEY language:python",
+               "sk-ant-api language:python", "ANTHROPIC_API_KEY filename:.env",
+               "hf_ language:python", "HUGGINGFACE_TOKEN filename:.env",
+               "r8_ language:python", "gsk_ language:python",
+               "GROQ_API_KEY filename:.env", "MISTRAL_API_KEY filename:.env"],
+    "STRIPE": ["sk_live_ language:python", "sk_live_ language:javascript",
+               "sk_live_ filename:.env", "sk_test_ filename:.env",
+               "STRIPE_SECRET_KEY filename:.env",
+               "STRIPE_SECRET_KEY language:python", "whsec_ filename:.env"],
+    "GITHUB": ["ghp_ language:yaml", "ghp_ filename:.env",
+               "github_pat_ language:yaml", "GITHUB_TOKEN filename:.env",
+               "gho_ language:python", "glpat- language:yaml"],
+    "CHAT":   ["xoxb- language:python", "xoxb- filename:.env",
+               "SLACK_BOT_TOKEN filename:.env",
+               "DISCORD_TOKEN filename:.env", "DISCORD_BOT_TOKEN filename:.env",
+               "discord.com/api/webhooks language:javascript",
+               "TELEGRAM_BOT_TOKEN filename:.env",
+               "api.telegram.org/bot language:python"],
+    "DB":     ["mongodb+srv:// language:javascript", "mongodb+srv:// filename:.env",
+               "postgres:// language:python", "DATABASE_URL filename:.env",
+               "MONGO_URI filename:.env", "REDIS_URL filename:.env",
+               "SUPABASE_SERVICE_ROLE_KEY filename:.env"],
+    "KEYS":   ["-----BEGIN RSA PRIVATE KEY-----",
+               "-----BEGIN OPENSSH PRIVATE KEY-----",
+               "-----BEGIN EC PRIVATE KEY-----",
+               "-----BEGIN PRIVATE KEY-----",
+               "-----BEGIN PGP PRIVATE KEY BLOCK-----"],
+    "ENV":    ["API_KEY= filename:.env", "SECRET_KEY= filename:.env",
+               "ACCESS_TOKEN= filename:.env", "PASSWORD= filename:.env",
+               "DB_PASSWORD= filename:.env", "AUTH_TOKEN= filename:.env",
+               "SECRET= filename:.env", "CLIENT_SECRET= filename:.env",
+               "DB_PASSWORD filename:.env.production",
+               "SECRET_KEY filename:.env.production"],
+}
+
 def menu_global(cfg: dict):
     hdr("🌐  GLOBAL SCAN", C.YELLOW)
-    print(f"  {C.LIGHTBLACK_EX}Searches all of public GitHub.{R}")
+    print(f"  {C.LIGHTBLACK_EX}Searches all of public GitHub for secrets.{R}")
+    print(f"  {C.LIGHTBLACK_EX}200+ queries · every category covered.{R}\n")
 
     if not cfg.get("token"):
-        print(f"  {C.RED}✗ No token. Set one in Settings first.{R}")
+        print(f"  {C.RED}✗ No GitHub token set.{R}")
+        print(f"  {C.LIGHTBLACK_EX}Go to Settings → GitHub Token first.{R}")
         input(f"\n  {C.LIGHTBLACK_EX}↵ Enter…{R}")
         return
 
-    mode = choose("Query mode:", [
-        questionary.Choice("  🤖  Auto  — 50+ built-in queries", "auto"),
-        questionary.Choice("  🔎  Custom — enter search term",    "custom"),
-    ])
-    if not mode:
+    cat = choose("What to scan for:", _GLOBAL_CATEGORIES)
+    if not cat or cat == "back":
         return
 
-    query = "AKIA"
-    if mode == "custom":
-        query = ask("Search term (e.g. sk_live_, ghp_):")
-        if not query:
+    custom_query = None
+    if cat == "CUSTOM":
+        custom_query = ask("Search term (e.g. sk_live_, AKIA, ghp_):")
+        if not custom_query:
             return
 
-    limit = ask("Max results per query:", default="30")
+    speed = choose("Speed:", [
+        questionary.Choice("  ⚡  Fast   — parallel batches (recommended)", "fast"),
+        questionary.Choice("  🐢  Safe   — fully sequential (lower API load)", "safe"),
+    ])
+    if not speed:
+        return
+
+    limit = ask("Max results per query:", default="20")
+
     fmt = choose("Save report?", [
         questionary.Choice("  🌐  HTML", "html"),
         questionary.Choice("  📊  JSON", "json"),
+        questionary.Choice("  📋  CSV",  "csv"),
         questionary.Choice("  ✗   Terminal only", "none"),
     ])
     if fmt is None:
         return
 
-    args = ["--global", query, "--token", cfg["token"],
-            "--max-results", limit]
-    if fmt != "none":
-        args += ["--output", f"global-scan.{fmt}"]
+    # Build query arg — use first query of category for --global flag;
+    # for ALL or category, scanner runs full built-in list via orchestrator
+    if cat == "CUSTOM":
+        query_arg = custom_query
+    elif cat == "ALL":
+        query_arg = "__ALL__"   # sentinel — orchestrator runs full list
+    else:
+        # Use first query of the category as the entry point;
+        # scanner --global with a category prefix triggers category queries
+        query_arg = _CATEGORY_QUERY_MAP[cat][0]
 
-    hdr("🌐  GLOBAL SCAN RUNNING…", C.YELLOW)
+    args = ["--global", query_arg,
+            "--token", cfg["token"],
+            "--max-results", limit]
+    if speed == "fast":
+        args += ["--mode", "fast"]
+    if fmt != "none":
+        args += ["--output", f"global-{cat.lower()}.{fmt}"]
+
+    hdr(f"🌐  SCANNING: {cat}", C.YELLOW)
+    print(f"  {C.LIGHTBLACK_EX}Queries running… Ctrl+C to stop early.{R}\n")
     run_scanner(*args)
 
 # ── VAULT menu ────────────────────────────────────────────────

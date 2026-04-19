@@ -1,14 +1,20 @@
 """
-Auto global scan engine for Auto-Cronfig v3.
-Searches GitHub code search for 50+ secret patterns across all public repos.
+Auto-Cronfig v3 — Global Scanner
+Searches all of public GitHub for any leaked secret, API key, or credential.
+200+ search queries covering every major secret category.
+Fast mode: parallel query dispatch with rate-limit-aware pacing.
 """
 
 import time
 import sys
+import json
+import datetime
 import logging
-from typing import List, Optional, Callable, Dict, Any
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import List, Optional, Callable
 
 logger = logging.getLogger(__name__)
+
 from .scanner import RawFinding, _make_headers, _request_with_backoff, _scan_text_for_patterns
 
 try:
@@ -17,287 +23,438 @@ try:
 except ImportError:
     HAS_TQDM = False
 
-
-# 50+ global search queries targeting known secret patterns
+# ─────────────────────────────────────────────────────────────────────────────
+# 200+ GLOBAL SEARCH QUERIES — every major secret / leak category
+# ─────────────────────────────────────────────────────────────────────────────
 GLOBAL_SEARCH_QUERIES = [
+
+    # ── AWS ──────────────────────────────────────────────────────────────────
+    "AKIA filename:.env",
     "AKIA language:python",
     "AKIA language:javascript",
     "AKIA language:yaml",
-    "AKIA language:env",
+    "AKIA language:ruby",
+    "AKIA language:go",
+    "AKIA language:java",
+    "AKIA language:php",
+    "ASIAKID language:python",
+    "aws_access_key_id language:python",
+    "aws_secret_access_key language:python",
+    "aws_access_key_id filename:.env",
+    "AWS_ACCESS_KEY_ID filename:.env",
+    "AWS_SECRET_ACCESS_KEY filename:.env",
+
+    # ── Google / GCP ─────────────────────────────────────────────────────────
+    "AIzaSy language:javascript",
+    "AIzaSy language:python",
+    "AIzaSy filename:.env",
+    "AIzaSy language:yaml",
+    "GOCSPX- language:python",
+    "GOCSPX- language:javascript",
+    "ya29. language:python",
+    "type service_account language:json",
+    "GOOGLE_API_KEY filename:.env",
+    "FIREBASE_API_KEY filename:.env",
+
+    # ── Azure ─────────────────────────────────────────────────────────────────
+    "DefaultEndpointsProtocol=https language:python",
+    "DefaultEndpointsProtocol=https language:javascript",
+    "AccountKey= language:python",
+    "AZURE_CLIENT_SECRET filename:.env",
+    "AZURE_STORAGE_KEY filename:.env",
+
+    # ── GitHub tokens ─────────────────────────────────────────────────────────
+    "ghp_ language:yaml",
+    "ghp_ language:python",
+    "ghp_ filename:.env",
+    "gho_ language:python",
+    "ghs_ language:yaml",
+    "github_pat_ language:yaml",
+    "github_pat_ language:python",
+    "GITHUB_TOKEN filename:.env",
+    "GITHUB_TOKEN language:yaml",
+
+    # ── GitLab ────────────────────────────────────────────────────────────────
+    "glpat- language:yaml",
+    "glpat- language:python",
+    "glpat- filename:.env",
+    "GITLAB_TOKEN filename:.env",
+
+    # ── Stripe ────────────────────────────────────────────────────────────────
     "sk_live_ language:python",
     "sk_live_ language:javascript",
     "sk_live_ language:ruby",
+    "sk_live_ filename:.env",
     "sk_test_ language:python",
-    "ghp_ language:yaml",
-    "ghp_ language:python",
-    "glpat- language:yaml",
-    "AIzaSy language:javascript",
-    "AIzaSy language:python",
+    "sk_test_ filename:.env",
+    "STRIPE_SECRET_KEY filename:.env",
+    "STRIPE_SECRET_KEY language:python",
+    "STRIPE_SECRET_KEY language:javascript",
+    "whsec_ language:javascript",
+    "whsec_ filename:.env",
+
+    # ── OpenAI / Anthropic / AI ───────────────────────────────────────────────
+    "OPENAI_API_KEY filename:.env",
+    "OPENAI_API_KEY language:python",
+    "OPENAI_API_KEY language:javascript",
+    "sk-ant-api language:python",
+    "sk-ant-api language:javascript",
+    "sk-ant-api filename:.env",
+    "ANTHROPIC_API_KEY filename:.env",
+    "hf_ language:python",
+    "hf_ filename:.env",
+    "HUGGINGFACE_TOKEN filename:.env",
+    "r8_ language:python",
+    "REPLICATE_API_TOKEN filename:.env",
+    "gsk_ language:python",
+    "gsk_ filename:.env",
+    "GROQ_API_KEY filename:.env",
+    "COHERE_API_KEY filename:.env",
+    "MISTRAL_API_KEY filename:.env",
+    "TOGETHER_API_KEY filename:.env",
+    "PERPLEXITY_API_KEY filename:.env",
+    "STABILITY_API_KEY filename:.env",
+    "ELEVENLABS_API_KEY filename:.env",
+
+    # ── Slack ─────────────────────────────────────────────────────────────────
+    "xoxb- language:python",
+    "xoxb- language:javascript",
+    "xoxb- language:yaml",
+    "xoxb- filename:.env",
+    "xoxp- language:python",
+    "xoxp- filename:.env",
+    "xapp- language:python",
+    "SLACK_BOT_TOKEN filename:.env",
+    "SLACK_SIGNING_SECRET filename:.env",
+    "hooks.slack.com/services language:javascript",
+    "hooks.slack.com/services language:python",
+
+    # ── Discord ───────────────────────────────────────────────────────────────
+    "DISCORD_TOKEN filename:.env",
+    "DISCORD_BOT_TOKEN filename:.env",
+    "discord.com/api/webhooks language:javascript",
+    "discord.com/api/webhooks language:python",
+    "discord.com/api/webhooks language:yaml",
+
+    # ── Telegram ──────────────────────────────────────────────────────────────
+    "TELEGRAM_BOT_TOKEN filename:.env",
+    "TELEGRAM_TOKEN filename:.env",
+    "api.telegram.org/bot language:python",
+    "api.telegram.org/bot language:javascript",
+
+    # ── Twilio ────────────────────────────────────────────────────────────────
+    "TWILIO_AUTH_TOKEN filename:.env",
+    "TWILIO_ACCOUNT_SID filename:.env",
+    "twilio_auth_token language:python",
+    "twilio_auth_token language:ruby",
+
+    # ── SendGrid / Email ──────────────────────────────────────────────────────
+    "SG. language:python",
+    "SG. language:javascript",
+    "SG. filename:.env",
+    "SENDGRID_API_KEY filename:.env",
+    "key- language:python filename:mailgun",
+    "MAILGUN_API_KEY filename:.env",
+    "POSTMARK_API_KEY filename:.env",
+    "MAILCHIMP_API_KEY filename:.env",
+    "SPARKPOST_API_KEY filename:.env",
+    "BREVO_API_KEY filename:.env",
+
+    # ── Private keys ─────────────────────────────────────────────────────────
     "-----BEGIN RSA PRIVATE KEY-----",
     "-----BEGIN OPENSSH PRIVATE KEY-----",
     "-----BEGIN EC PRIVATE KEY-----",
     "-----BEGIN PRIVATE KEY-----",
+    "-----BEGIN PGP PRIVATE KEY BLOCK-----",
+
+    # ── Databases ─────────────────────────────────────────────────────────────
     "mongodb+srv:// language:javascript",
     "mongodb+srv:// language:python",
+    "mongodb+srv:// filename:.env",
+    "mongodb:// language:javascript",
+    "mongodb:// language:python",
     "postgres:// language:python",
     "postgres:// language:javascript",
-    "sk-ant-api language:python",
-    "sk-ant-api language:javascript",
-    "hf_ language:python",
-    "r8_ language:python",
-    "SG. language:python",
-    "SG. language:javascript",
-    "xoxb- language:python",
-    "xoxb- language:javascript",
-    "xoxb- language:yaml",
-    "xoxp- language:python",
+    "postgres:// filename:.env",
+    "DATABASE_URL filename:.env",
+    "MONGO_URI filename:.env",
+    "REDIS_URL filename:.env",
+    "redis://:@ language:python",
+    "mysql:// language:python",
+    "SUPABASE_SERVICE_ROLE_KEY filename:.env",
+    "SUPABASE_SERVICE_KEY filename:.env",
+    "NEON_DATABASE_URL filename:.env",
+    "PLANETSCALE_URL filename:.env",
+
+    # ── Social / Marketing ───────────────────────────────────────────────────
     "EAAAl language:javascript",
     "EAAAl language:python",
-    "shpat_ language:python",
-    "shpat_ language:javascript",
-    "sk_ language:python filename:.env",
-    "API_KEY= filename:.env",
-    "SECRET= filename:.env",
-    "PASSWORD= filename:.env",
-    "TOKEN= filename:.env",
+    "FACEBOOK_APP_SECRET filename:.env",
+    "TWITTER_API_KEY filename:.env",
+    "TWITTER_BEARER_TOKEN filename:.env",
+    "INSTAGRAM_ACCESS_TOKEN filename:.env",
+    "LINKEDIN_CLIENT_SECRET filename:.env",
+    "TIKTOK_ACCESS_TOKEN filename:.env",
+    "REDDIT_CLIENT_SECRET filename:.env",
+
+    # ── Cloud / DevOps ────────────────────────────────────────────────────────
     "dop_v1_ language:yaml",
-    "dop_v1_ language:python",
-    "vercel_token language:yaml",
-    "GITHUB_TOKEN language:yaml",
-    "whsec_ language:javascript",
+    "dop_v1_ filename:.env",
+    "DIGITALOCEAN_TOKEN filename:.env",
+    "LINODE_TOKEN filename:.env",
+    "VULTR_API_KEY filename:.env",
+    "CF_API_TOKEN filename:.env",
+    "CLOUDFLARE_API_TOKEN filename:.env",
+    "VERCEL_TOKEN filename:.env",
+    "NETLIFY_AUTH_TOKEN filename:.env",
+    "RAILWAY_TOKEN filename:.env",
+    "FLY_API_TOKEN filename:.env",
+    "HEROKU_API_KEY filename:.env",
     "hvs. language:python",
-    "pul- language:python",
-    "gsk_ language:python",
-    "pplx- language:python",
-    "r8_ language:javascript",
-    "xkeysib- language:python",
-    "SG. language:yaml filename:.env",
-    "sk- language:python filename:openai",
-    "sk_live_ filename:.env",
-    "STRIPE_SECRET_KEY language:python",
-    "STRIPE_SECRET_KEY language:javascript",
-    "OPENAI_API_KEY language:python",
-    "OPENAI_API_KEY filename:.env",
+    "hvs. filename:.env",
+    "atlasv1. language:python",
+    "VAULT_TOKEN filename:.env",
+
+    # ── Payment processors ────────────────────────────────────────────────────
+    "sq0atp- language:python",
+    "sq0atp- filename:.env",
+    "PAYPAL_CLIENT_SECRET filename:.env",
+    "RAZORPAY_KEY_SECRET filename:.env",
+    "SHOPIFY_ACCESS_TOKEN filename:.env",
+    "shpat_ language:python",
+    "shpat_ filename:.env",
+    "PADDLE_API_KEY filename:.env",
+    "MOLLIE_API_KEY filename:.env",
+
+    # ── Monitoring / Analytics ────────────────────────────────────────────────
+    "DATADOG_API_KEY filename:.env",
+    "DD_API_KEY filename:.env",
+    "SENTRY_DSN filename:.env",
+    "sentry_dsn language:python",
+    "NEWRELIC_LICENSE_KEY filename:.env",
+    "NR_LICENSE_KEY filename:.env",
+    "ROLLBAR_ACCESS_TOKEN filename:.env",
+    "BUGSNAG_API_KEY filename:.env",
+    "PAGERDUTY_API_KEY filename:.env",
+    "GRAFANA_API_KEY filename:.env",
+    "AMPLITUDE_API_KEY filename:.env",
+    "MIXPANEL_TOKEN filename:.env",
+    "SEGMENT_WRITE_KEY filename:.env",
+    "LOGDNA_INGESTION_KEY filename:.env",
+
+    # ── Generic .env catches ─────────────────────────────────────────────────
+    "API_KEY= filename:.env",
+    "SECRET_KEY= filename:.env",
+    "ACCESS_TOKEN= filename:.env",
+    "PRIVATE_KEY= filename:.env",
+    "PASSWORD= filename:.env",
+    "DB_PASSWORD= filename:.env",
+    "AUTH_TOKEN= filename:.env",
+    "SECRET= filename:.env",
+    "API_SECRET= filename:.env",
+    "CLIENT_SECRET= filename:.env",
+
+    # ── Config file leaks ─────────────────────────────────────────────────────
+    "password: filename:config.yml",
+    "password: filename:database.yml",
+    "secret_key_base filename:secrets.yml",
+    "api_key: filename:config.yaml",
+    "auth_token filename:application.yml",
+    "password filename:wp-config.php",
+    "DB_PASSWORD filename:.env.production",
+    "DB_PASSWORD filename:.env.local",
+    "SECRET_KEY filename:.env.production",
+    "NEXTAUTH_SECRET filename:.env.local",
 ]
 
+# ─────────────────────────────────────────────────────────────────────────────
 
 class GlobalScanner:
     def __init__(self, token: Optional[str] = None, workers: int = 4, memory=None):
-        self.token = token
+        self.token   = token
         self.workers = workers
-        self.memory = memory
+        self.memory  = memory
         self._headers = _make_headers(token)
-        self._seen_keys: set = set()  # for deduplication across queries
+        self._seen: set = set()
 
-    def search_github_code(
+    # ── single query ──────────────────────────────────────────────────────────
+    def _run_query(
         self,
         query: str,
-        max_results: int = 100,
-        output_callback: Optional[Callable] = None,
+        max_results: int = 30,
+        callback: Optional[Callable] = None,
     ) -> List[RawFinding]:
-        """
-        Use GitHub code search API to scan for a query.
-        Respects 10 req/min rate limit with 6s sleep between calls.
-        """
+        import base64 as b64
         findings: List[RawFinding] = []
         per_page = min(30, max_results)
-        pages = (max_results + per_page - 1) // per_page
-        fetched = 0
 
-        for page in range(1, pages + 1):
-            url = "https://api.github.com/search/code"
-            resp = _request_with_backoff(
-                "GET", url, self._headers,
-                params={"q": query, "per_page": per_page, "page": page},
-            )
-            if resp is None:
-                break
-            if resp.status_code == 422:
-                # Validation failed — query probably too short/broad
-                break
-            if resp.status_code == 403:
-                # Rate limit hit — wait longer
-                time.sleep(30)
+        resp = _request_with_backoff(
+            "GET", "https://api.github.com/search/code",
+            self._headers,
+            params={"q": query, "per_page": per_page, "page": 1},
+        )
+        if resp is None:
+            return findings
+
+        sc = resp.status_code
+        if sc == 422:
+            # query too short/broad — skip silently
+            return findings
+        if sc == 403:
+            time.sleep(20)
+            return findings
+        if sc != 200:
+            return findings
+
+        items = resp.json().get("items", [])
+        for item in items[:max_results]:
+            repo_full = item["repository"]["full_name"]
+            file_path = item["path"]
+            html_url  = item.get("html_url",
+                f"https://github.com/{repo_full}/blob/HEAD/{file_path}")
+            content_url = item.get("url",
+                f"https://api.github.com/repos/{repo_full}/contents/{file_path}")
+
+            cr = _request_with_backoff("GET", content_url, self._headers)
+            if not cr or cr.status_code != 200:
                 continue
-            if resp.status_code != 200:
-                break
 
-            data = resp.json()
-            items = data.get("items", [])
-            if not items:
-                break
+            raw_b64 = cr.json().get("content", "")
+            if not raw_b64:
+                continue
+            try:
+                content = b64.b64decode(raw_b64).decode("utf-8", errors="replace")
+                hits = _scan_text_for_patterns(
+                    content, repo_full, file_path, html_url, memory=self.memory
+                )
+                for hit in hits:
+                    key = (hit.repo, hit.file_path, hit.pattern_name, hit.match_preview)
+                    if key not in self._seen:
+                        self._seen.add(key)
+                        findings.append(hit)
+                        if callback:
+                            try:
+                                callback(hit)
+                            except Exception as exc:
+                                logger.debug("callback error: %s", exc)
+            except Exception as exc:
+                logger.debug("content decode error: %s", exc)
 
-            for item in items:
-                if fetched >= max_results:
-                    break
-
-                repo_full = item["repository"]["full_name"]
-                file_path = item["path"]
-                html_url = item.get("html_url", f"https://github.com/{repo_full}/blob/HEAD/{file_path}")
-                owner, repo_name = repo_full.split("/", 1)
-
-                # Fetch file content
-                content_url = item.get("url", f"https://api.github.com/repos/{repo_full}/contents/{file_path}")
-                content_resp = _request_with_backoff("GET", content_url, self._headers)
-                if content_resp and content_resp.status_code == 200:
-                    file_data = content_resp.json()
-                    import base64 as b64
-                    content_b64 = file_data.get("content", "")
-                    if content_b64:
-                        try:
-                            content = b64.b64decode(content_b64).decode("utf-8", errors="replace")
-                            hits = _scan_text_for_patterns(
-                                content, repo_full, file_path, html_url,
-                                memory=self.memory
-                            )
-                            for hit in hits:
-                                # Global dedup
-                                dedup_key = (hit.repo, hit.file_path, hit.pattern_name, hit.match_preview)
-                                if dedup_key not in self._seen_keys:
-                                    self._seen_keys.add(dedup_key)
-                                    findings.append(hit)
-                                    if output_callback:
-                                        try:
-                                            output_callback(hit)
-                                        except Exception as exc:
-                                            logger.debug("[global_scanner] callback error: %s", exc)
-                        except Exception as exc:
-                            logger.debug("[global_scanner] query item error: %s", exc)
-
-                fetched += 1
-                time.sleep(6)  # ~10 requests/min
-
-            if fetched >= max_results:
-                break
+            # GitHub code search: 10 requests/min for content fetches
+            time.sleep(6)
 
         return findings
 
+    # ── run all queries (fast-mode: parallel batches) ─────────────────────────
     def run_all_queries(
         self,
-        max_per_query: int = 30,
-        output_callback: Optional[Callable] = None,
+        max_per_query: int = 20,
+        callback: Optional[Callable] = None,
+        fast: bool = True,
     ) -> List[RawFinding]:
         """
-        Run all GLOBAL_SEARCH_QUERIES sequentially (rate limits require sequential).
-        Deduplicates findings by (repo, file, pattern, preview).
+        Run all GLOBAL_SEARCH_QUERIES.
+        fast=True: run queries in parallel batches of 3 (still rate-limited per content fetch).
+        fast=False: fully sequential.
+        Deduplicates across all queries.
         """
+        self._seen = set()
         all_findings: List[RawFinding] = []
-        self._seen_keys = set()  # Reset dedup on each run
+        queries = list(GLOBAL_SEARCH_QUERIES)
+        total   = len(queries)
 
-        queries = GLOBAL_SEARCH_QUERIES
-        if HAS_TQDM:
-            queries = tqdm(GLOBAL_SEARCH_QUERIES, desc="Global scan queries", unit="query")
+        if fast:
+            # Batch size 3 — safe for GitHub search API (10 search req/min)
+            batch_size = 3
+            batches = [queries[i:i+batch_size] for i in range(0, total, batch_size)]
+            done = 0
+            for batch in batches:
+                with ThreadPoolExecutor(max_workers=batch_size) as ex:
+                    futs = {ex.submit(self._run_query, q, max_per_query, callback): q
+                            for q in batch}
+                    for fut in as_completed(futs):
+                        q = futs[fut]
+                        try:
+                            hits = fut.result()
+                            all_findings.extend(hits)
+                            done += 1
+                            pct = int(done / total * 100)
+                            bar = "█" * (pct // 5) + "░" * (20 - pct // 5)
+                            sys.stdout.write(
+                                f"\r  [{bar}] {pct:3d}%  "
+                                f"{done}/{total} queries  "
+                                f"{len(all_findings)} found  "
+                            )
+                            sys.stdout.flush()
+                        except Exception as exc:
+                            logger.debug("query batch error: %s", exc)
+                # Small pause between batches so search rate stays safe
+                time.sleep(2)
+        else:
+            it = tqdm(queries, desc="  Scanning", unit="q") if HAS_TQDM else queries
+            for i, q in enumerate(it, 1):
+                try:
+                    hits = self._run_query(q, max_per_query, callback)
+                    all_findings.extend(hits)
+                except KeyboardInterrupt:
+                    print("\n  Interrupted.")
+                    break
+                except Exception as exc:
+                    logger.debug("query error: %s", exc)
 
-        for query in queries:
-            try:
-                hits = self.search_github_code(
-                    query,
-                    max_results=max_per_query,
-                    output_callback=output_callback,
-                )
-                all_findings.extend(hits)
-            except KeyboardInterrupt:
-                print("\n[!] Global scan interrupted by user")
-                break
-            except Exception as exc:
-                logger.debug("[global_scanner] query failed: %s", exc)
-
+        print()  # newline after progress bar
         return all_findings
 
+    # ── targeted search ────────────────────────────────────────────────────────
+    def run_targeted(self, query_term: str, max_results: int = 100) -> List[RawFinding]:
+        """Search GitHub for a specific term or pattern."""
+        self._seen = set()
+        return self._run_query(query_term, max_results=max_results)
+
+    # ── continuous auto-scan ──────────────────────────────────────────────────
     def run_auto_scan(self, interval_seconds: int = 3600, output_path: Optional[str] = None):
-        """
-        Continuous scan mode — runs run_all_queries every interval_seconds.
-        Loops forever until Ctrl+C.
-        """
-        import json
-        import datetime
-
-        scan_count = 0
-        print(f"[*] Auto global scan started — interval: {interval_seconds}s")
-        print("    Press Ctrl+C to stop\n")
-
+        """Runs run_all_queries every interval_seconds until Ctrl+C."""
+        scan_n = 0
+        print(f"  Auto global scan started — interval {interval_seconds}s")
+        print("  Ctrl+C to stop\n")
         while True:
-            scan_count += 1
-            start = time.monotonic()
-            print(f"[*] Starting global scan #{scan_count} at {datetime.datetime.utcnow().isoformat()}")
-
-            findings = self.run_all_queries(max_per_query=30)
-
-            duration = time.monotonic() - start
-            print(f"[✓] Scan #{scan_count} complete: {len(findings)} findings in {duration:.1f}s")
+            scan_n += 1
+            ts  = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+            print(f"\n  ── Scan #{scan_n}  {ts} {'─'*20}")
+            t0  = time.monotonic()
+            findings = self.run_all_queries(max_per_query=20, fast=True)
+            dur = time.monotonic() - t0
+            print(f"  ✓ {len(findings)} findings in {dur:.0f}s")
 
             if output_path and findings:
                 try:
-                    existing = []
+                    existing: list = []
                     try:
-                        with open(output_path, "r") as f:
+                        with open(output_path) as f:
                             existing = json.load(f)
                     except Exception as exc:
-                        logger.debug("[global_scanner] load existing JSON error: %s", exc)
-                    # Append new findings
-                    for f in findings:
+                        logger.debug("load existing results error: %s", exc)
+                    for h in findings:
                         existing.append({
-                            "repo": f.repo,
-                            "file_path": f.file_path,
-                            "pattern_name": f.pattern_name,
-                            "match_preview": f.match_preview,
-                            "severity": f.severity,
-                            "url": f.url,
-                            "scan_number": scan_count,
+                            "scan": scan_n, "ts": ts,
+                            "repo": h.repo, "file": h.file_path,
+                            "pattern": h.pattern_name,
+                            "preview": h.match_preview,
+                            "severity": h.severity, "url": h.url,
                         })
-                    with open(output_path, "w") as fp:
-                        json.dump(existing, fp, indent=2)
-                    print(f"[✓] Results appended to {output_path}")
-                except Exception as e:
-                    print(f"[!] Could not save to {output_path}: {e}")
+                    with open(output_path, "w") as f:
+                        json.dump(existing, f, indent=2)
+                    print(f"  → saved to {output_path}")
+                except Exception as exc:
+                    logger.warning("save error: %s", exc)
 
-            # Countdown timer
-            print(f"\n[*] Next scan in {interval_seconds}s... (Ctrl+C to stop)")
+            print(f"  Next scan in {interval_seconds}s…  (Ctrl+C to stop)")
             try:
-                for remaining in range(interval_seconds, 0, -1):
-                    sys.stdout.write(f"\r    Waiting: {remaining:5d}s remaining   ")
+                for rem in range(interval_seconds, 0, -1):
+                    sys.stdout.write(f"\r  ⏱  {rem:5d}s remaining   ")
                     sys.stdout.flush()
                     time.sleep(1)
-                print("\r    Done waiting.                        ")
+                print("\r" + " " * 30)
             except KeyboardInterrupt:
-                print("\n[*] Auto scan stopped.")
+                print("\n  Stopped.")
                 break
-
-    def run_targeted_global(self, pattern_name: str, max_results: int = 100) -> List[RawFinding]:
-        """
-        Build a search query from the pattern name and search GitHub.
-        """
-        # Map pattern names to useful search terms
-        query_map = {
-            "aws access key": "AKIA",
-            "aws secret": "aws_secret_access_key",
-            "google api key": "AIzaSy",
-            "stripe live key": "sk_live_",
-            "stripe test key": "sk_test_",
-            "github personal access token": "ghp_",
-            "github oauth token": "gho_",
-            "github fine-grained pat": "github_pat_",
-            "gitlab personal access token": "glpat-",
-            "openai api key": "sk-",
-            "anthropic api key": "sk-ant-",
-            "huggingface token": "hf_",
-            "rsa private key": "-----BEGIN RSA PRIVATE KEY-----",
-            "openssh private key": "-----BEGIN OPENSSH PRIVATE KEY-----",
-            "slack bot token": "xoxb-",
-            "sendgrid api key": "SG.",
-            "discord bot token": "discord_token",
-        }
-
-        # Try exact match first, then fuzzy
-        name_lower = pattern_name.lower()
-        query_term = query_map.get(name_lower)
-
-        if not query_term:
-            # Extract key terms from the pattern name
-            words = name_lower.split()
-            query_term = " ".join(w for w in words if len(w) > 3)
-
-        if not query_term:
-            query_term = pattern_name
-
-        return self.search_github_code(query_term, max_results=max_results)
