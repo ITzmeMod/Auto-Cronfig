@@ -3,19 +3,17 @@
 Auto-Cronfig — Interactive TUI Menu
 Run: python menu.py
 """
-
 import os
 import sys
 import time
 import json
-import shutil
 import logging
 import subprocess  # nosec B404 — used with fixed args, shell=False
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# ── Dependency check ─────────────────────────────────────────────────────────
+# ── Dependency check ──────────────────────────────────────────
 _missing = []
 try:
     import questionary
@@ -23,540 +21,482 @@ try:
 except ImportError:
     _missing.append("questionary")
 try:
-    from colorama import Fore, Back, Style as CStyle, init as _cinit
+    from colorama import Fore, Style as CStyle, init as _cinit
     _cinit(autoreset=True)
 except ImportError:
     _missing.append("colorama")
 
 if _missing:
-    print(f"\n  Missing packages: {', '.join(_missing)}")
+    print(f"\n  Missing: {', '.join(_missing)}")
     print("  Run: pip install -r requirements.txt\n")
     sys.exit(1)
 
-# ── Colours & style ───────────────────────────────────────────────────────────
-C = Fore
-R = CStyle.RESET_ALL
-B = CStyle.BRIGHT
+# ── Aliases ───────────────────────────────────────────────────
+C   = Fore
+R   = CStyle.RESET_ALL
+B   = CStyle.BRIGHT
+DIM = CStyle.DIM
 
-MENU_STYLE = Style([
-    ("qmark",        "fg:#58a6ff bold"),
-    ("question",     "fg:#e6edf3 bold"),
-    ("answer",       "fg:#58a6ff bold"),
-    ("pointer",      "fg:#a371f7 bold"),
-    ("highlighted",  "fg:#e6edf3 bg:#1f2937 bold"),
-    ("selected",     "fg:#3fb950"),
-    ("separator",    "fg:#3d444d"),
-    ("instruction",  "fg:#8b949e"),
-    ("text",         "fg:#8b949e"),
-    ("disabled",     "fg:#3d444d italic"),
+# ── Terminal width helper ─────────────────────────────────────
+def tw() -> int:
+    try:
+        import shutil
+        return max(40, shutil.get_terminal_size((60, 24)).columns)
+    except Exception:
+        return 60
+
+# ── Questionary style ─────────────────────────────────────────
+STYLE = Style([
+    ("qmark",       "fg:#58a6ff bold"),
+    ("question",    "fg:#e6edf3 bold"),
+    ("answer",      "fg:#58a6ff bold"),
+    ("pointer",     "fg:#a371f7 bold"),
+    ("highlighted", "fg:#ffffff bg:#1f2937 bold"),
+    ("selected",    "fg:#3fb950 bold"),
+    ("separator",   "fg:#3d444d"),
+    ("instruction", "fg:#8b949e"),
+    ("text",        "fg:#8b949e"),
+    ("disabled",    "fg:#3d444d italic"),
 ])
 
+# ── Config ────────────────────────────────────────────────────
 CONFIG_FILE = Path.home() / ".auto-cronfig" / "config.json"
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-def clear():
-    # Use ANSI escape to clear screen — avoids shell invocation (fixes B605)
-    if os.name == "nt":
-        # cmd.exe is a Windows system binary — partial path is intentional (nosec B607)
-        subprocess.run(["cmd", "/c", "cls"], shell=False)  # nosec B603 B607
-    else:
-        # ANSI clear + cursor home — no subprocess needed
-        sys.stdout.write("\033[2J\033[H")
-        sys.stdout.flush()
-
-
-# Default config uses empty strings as unset sentinels — not passwords (nosec B105)
-_DEFAULT_CONFIG: dict = {  # nosec B105
-    "token": "",
-    "workers": 8,
+_DEFAULTS: dict = {  # nosec B105 — empty strings are unset sentinels
+    "token":           "",   # nosec B105
+    "workers":         8,
     "notify_severity": "HIGH",
-    "telegram_token": "",       # nosec B105
-    "telegram_chat_id": "",
-    "discord_webhook": "",      # nosec B105
-    "slack_webhook": "",        # nosec B105
+    "telegram_token":  "",   # nosec B105
+    "telegram_chat_id":"",
+    "discord_webhook": "",   # nosec B105
+    "slack_webhook":   "",   # nosec B105
 }
 
-
-def load_config() -> dict:
+def load_cfg() -> dict:
     if CONFIG_FILE.exists():
         try:
             data = json.loads(CONFIG_FILE.read_text())
-            # Merge with defaults so new keys are always present
-            return {**_DEFAULT_CONFIG, **data}
+            return {**_DEFAULTS, **data}
         except Exception as exc:
-            logger.warning("[menu] Failed to load config: %s", exc)
-    return dict(_DEFAULT_CONFIG)
+            logger.warning("config load error: %s", exc)
+    return dict(_DEFAULTS)
 
-
-def save_config(cfg: dict):
+def save_cfg(cfg: dict):
     CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
     CONFIG_FILE.write_text(json.dumps(cfg, indent=2))
 
-
 def mask(s: str) -> str:
     if not s:
-        return C.LIGHTBLACK_EX + "(not set)" + R
-    return C.GREEN + s[:6] + "****" + s[-4:] + R
+        return C.LIGHTBLACK_EX + "not set" + R
+    return C.GREEN + s[:4] + "••••" + s[-3:] + R
 
+# ── Screen helpers ────────────────────────────────────────────
+def clr():
+    if os.name == "nt":
+        subprocess.run(["cmd", "/c", "cls"], shell=False)  # nosec B603 B607
+    else:
+        sys.stdout.write("\033[2J\033[H")
+        sys.stdout.flush()
 
+def rule(char="─", color=C.LIGHTBLACK_EX):
+    w = min(tw(), 56)
+    print(f"  {color}{char * w}{R}")
+
+def hdr(title: str, color=C.CYAN):
+    clr()
+    _banner()
+    rule()
+    print(f"  {color}{B}{title}{R}")
+    rule()
+    print()
+
+# ── Banner (auto-fits to terminal width) ─────────────────────
+_WIDE_BANNER = [
+    f"{C.BLUE}{B}  ╔{'═'*52}╗",
+    f"  ║  {C.CYAN}   _         _        {C.YELLOW} ___  {C.MAGENTA}  __  {C.BLUE}             ║",
+    f"  ║  {C.CYAN}  / \\  _   _| |_ ___  {C.YELLOW}/ __|{C.MAGENTA} /  \\ {C.BLUE}  n f i g    ║",
+    f"  ║  {C.CYAN} / _ \\| | | | __/ _ \\ {C.YELLOW}| (__ {C.MAGENTA}| () |{C.BLUE}             ║",
+    f"  ║  {C.CYAN}/_/ \\_\\_,_|_|\\__\\___/ {C.YELLOW}\\___|{C.MAGENTA} \\__/ {C.BLUE}             ║",
+    f"  ║  {C.WHITE}{'─'*48}{C.BLUE}  ║",
+    f"  ║  {C.WHITE}  GitHub Secret Scanner  {C.YELLOW}v3.0.0{C.LIGHTBLACK_EX}  MIT{C.BLUE}       ║",
+    f"  ╚{'═'*52}╝{R}",
+]
+
+_NARROW_BANNER = [
+    f"{C.CYAN}{B}  ╔{'═'*34}╗",
+    f"  ║  {C.WHITE}  Auto-Cronfig  {C.YELLOW}v3.0.0{C.CYAN}        ║",
+    f"  ║  {C.LIGHTBLACK_EX}  GitHub Secret Scanner{C.CYAN}        ║",
+    f"  ╚{'═'*34}╝{R}",
+]
+
+def _banner():
+    if tw() >= 58:
+        for line in _WIDE_BANNER:
+            print(line)
+    else:
+        for line in _NARROW_BANNER:
+            print(line)
+    print()
+
+def _statusbar(cfg: dict):
+    tok = f"{C.GREEN}● token{R}" if cfg.get("token") else f"{C.RED}● no token{R}"
+    wkr = f"{C.CYAN}{cfg.get('workers',8)}w{R}"
+    print(f"  {tok}  {C.LIGHTBLACK_EX}│{R}  {wkr}  {C.LIGHTBLACK_EX}│{R}  "
+          f"{C.LIGHTBLACK_EX}db:~/.auto-cronfig/{R}")
+    print()
+
+# ── Run scanner subprocess ────────────────────────────────────
 def run_scanner(*args):
-    """Hand off to scanner.py with given args, then pause.
-
-    Only sys.executable (trusted Python binary) and scanner.py (local file)
-    are passed as the command — no user input reaches the command list directly.
-    All user-supplied values (repo, user, token) are passed as separate list
-    elements so the OS never interprets them as shell tokens (shell=False).
-    """
-    scanner_path = Path(__file__).parent / "scanner.py"
-    # Validate scanner exists before calling
-    if not scanner_path.is_file():
-        print(f"\n{C.RED}  ✗ scanner.py not found at {scanner_path}{R}")
+    """Invoke scanner.py with given args. All args are pre-validated
+    list elements — no user input reaches the shell (shell=False)."""
+    sp = Path(__file__).parent / "scanner.py"
+    if not sp.is_file():
+        print(f"\n  {C.RED}✗ scanner.py not found{R}")
         return
-    cmd = [sys.executable, str(scanner_path), *args]  # nosec B603
+    cmd = [sys.executable, str(sp), *args]  # nosec B603
     print()
     try:
-        subprocess.run(cmd, shell=False)  # nosec B603 — fixed binary, no shell
+        subprocess.run(cmd, shell=False)  # nosec B603
     except KeyboardInterrupt:
-        print(f"\n{C.YELLOW}  ⚠  Scan interrupted.{R}")
-    input(f"\n  {C.LIGHTBLACK_EX}Press Enter to return to menu…{R}")
+        print(f"\n  {C.YELLOW}⚠ interrupted{R}")
+    input(f"\n  {C.LIGHTBLACK_EX}↵ Enter to return…{R}")
 
-
-def ask(prompt, default="", password=False, validate=None):
+# ── Input helpers ─────────────────────────────────────────────
+def ask(prompt, default="", password=False):
     try:
         if password:
-            return questionary.password(prompt, style=MENU_STYLE).ask() or default
-        return questionary.text(prompt, default=default,
-                                validate=validate, style=MENU_STYLE).ask() or default
+            return questionary.password(f"  {prompt}", style=STYLE).ask() or default
+        return questionary.text(f"  {prompt}", default=default,
+                                style=STYLE).ask() or default
     except KeyboardInterrupt:
         return default
 
-
-def confirm(prompt, default=True) -> bool:
+def choose(prompt, choices):
     try:
-        return questionary.confirm(prompt, default=default, style=MENU_STYLE).ask()
+        return questionary.select(
+            f"  {prompt}", choices=choices, style=STYLE,
+        ).ask()
+    except KeyboardInterrupt:
+        return None
+
+def ok(prompt="Continue?", default=True) -> bool:
+    try:
+        return questionary.confirm(f"  {prompt}",
+                                   default=default, style=STYLE).ask()
     except KeyboardInterrupt:
         return False
 
-
-# ── Banner ────────────────────────────────────────────────────────────────────
-
-BANNER = f"""
-{C.BLUE}{B}  ╔═══════════════════════════════════════════════════════════════╗
-  ║                                                               ║
-  ║   {C.CYAN}█████{C.BLUE}╗ {C.CYAN}██╗   ██╗{C.BLUE}████████╗{C.CYAN}██████{C.BLUE}╗       {C.MAGENTA}██████{C.BLUE}╗ {C.MAGENTA}███████{C.BLUE}╗    ║
-  ║  {C.CYAN}██╔══██{C.BLUE}╗{C.CYAN}██║   ██║{C.BLUE}╚══{C.CYAN}██{C.BLUE}╔══╝{C.CYAN}██╔═══██{C.BLUE}╗     {C.MAGENTA}██╔════╝{C.MAGENTA}██╔════╝    ║
-  ║  {C.CYAN}███████║{C.CYAN}██║   ██║{C.BLUE}   {C.CYAN}██{C.BLUE}║   {C.CYAN}██║   ██║{C.BLUE}     {C.MAGENTA}██║     {C.MAGENTA}█████╗      ║
-  ║  {C.CYAN}██╔══██║{C.CYAN}██║   ██║{C.BLUE}   {C.CYAN}██{C.BLUE}║   {C.CYAN}██║   ██║{C.BLUE}     {C.MAGENTA}██║     {C.MAGENTA}██╔══╝      ║
-  ║  {C.CYAN}██║  ██║{C.CYAN}╚██████╔╝{C.BLUE}   {C.CYAN}██{C.BLUE}║   {C.CYAN}╚██████╔╝{C.BLUE}     {C.MAGENTA}╚██████╗{C.MAGENTA}██║         ║
-  ║  {C.LIGHTBLACK_EX}╚═╝  ╚═╝ ╚═════╝    ╚═╝    ╚═════╝       ╚═════╝╚═╝{C.BLUE}         ║
-  ║                                                               ║
-  ║  {C.CYAN}▸ {C.WHITE}C R O N F I G{C.BLUE}  ·  {C.MAGENTA}GitHub Secret Scanner{C.BLUE}  ·  {C.YELLOW}v3.0.0{C.BLUE}          ║
-  ║  {C.LIGHTBLACK_EX}Enterprise-grade · Self-learning · Android-ready{C.BLUE}               ║
-  ╚═══════════════════════════════════════════════════════════════╝{R}
-"""
-
-def print_banner():
-    clear()
-    print(BANNER)
-
-
-def print_status_bar(cfg: dict):
-    token_status = f"{C.GREEN}●{R} Token set" if cfg.get("token") else f"{C.RED}●{R} No token"
-    workers = cfg.get("workers", 8)
-    print(f"  {C.LIGHTBLACK_EX}{'─'*63}{R}")
-    print(f"  {token_status}  {C.LIGHTBLACK_EX}│{R}  {C.CYAN}Workers:{R} {workers}  {C.LIGHTBLACK_EX}│{R}  "
-          f"{C.CYAN}DB:{R} {C.LIGHTBLACK_EX}~/.auto-cronfig/memory.db{R}")
-    print(f"  {C.LIGHTBLACK_EX}{'─'*63}{R}\n")
-
-
-# ── Sub-menus ─────────────────────────────────────────────────────────────────
-
+# ── SCAN menu ─────────────────────────────────────────────────
 def menu_scan(cfg: dict):
-    """Single-repo or user scan."""
-    print_banner()
-    print(f"  {C.CYAN}{B}● SCAN TARGET{R}\n")
+    hdr("🔍  SCAN", C.CYAN)
 
-    choice = questionary.select(
-        "What do you want to scan?",
-        choices=[
-            questionary.Choice("  🗂   Single repository  (owner/repo or URL)", "repo"),
-            questionary.Choice("  👤  All repos for a GitHub user",             "user"),
-            questionary.Choice("  ◀   Back to main menu",                       "back"),
-        ],
-        style=MENU_STYLE,
-    ).ask()
-
-    if not choice or choice == "back":
+    target_type = choose("Target type:", [
+        questionary.Choice("  📁  Single repository", "repo"),
+        questionary.Choice("  👤  All repos of a user", "user"),
+        questionary.Choice("  ◀   Back", "back"),
+    ])
+    if not target_type or target_type == "back":
         return
 
-    target = ""
-    if choice == "repo":
-        target = ask("  Enter repo  (e.g. owner/repo or full URL): ")
-        if not target:
-            return
-    elif choice == "user":
-        target = ask("  Enter GitHub username: ")
-        if not target:
-            return
-
-    mode = questionary.select(
-        "Scan mode:",
-        choices=[
-            questionary.Choice("  ⚡⚡⚡  Fast      — files only, no key verification",   "fast"),
-            questionary.Choice("  ⚡⚡    Standard  — files + live key verification",      "standard"),
-            questionary.Choice("  🔬    Deep      — files + commits + PRs + issues + gists", "deep"),
-        ],
-        style=MENU_STYLE,
-    ).ask()
-    if not mode:
-        return
-
-    verify = mode != "fast"
-    workers = str(cfg.get("workers", 8))
-
-    output_choice = questionary.select(
-        "Save report to file?",
-        choices=[
-            questionary.Choice("  📄  HTML report  (beautiful dark-theme)",   "html"),
-            questionary.Choice("  📊  JSON report  (machine-readable)",        "json"),
-            questionary.Choice("  📋  CSV report   (spreadsheet-friendly)",    "csv"),
-            questionary.Choice("  📝  Markdown     (for GitHub issues/PRs)",   "md"),
-            questionary.Choice("  ✗   No — terminal output only",              "none"),
-        ],
-        style=MENU_STYLE,
-    ).ask()
-    if output_choice is None:
-        return
-
-    args = []
-    if choice == "repo":
-        args += ["--repo", target]
+    if target_type == "repo":
+        target = ask("Repo  (owner/repo or URL):")
     else:
-        args += ["--user", target]
-
-    args += ["--mode", mode, "--workers", workers]
-
-    if cfg.get("token"):
-        args += ["--token", cfg["token"]]
-    if not verify:
-        args += ["--no-verify"]
-    if output_choice != "none":
-        fname = f"report-{target.replace('/', '-')}.{output_choice}"
-        args += ["--output", fname]
-        print(f"\n  {C.CYAN}▸ Report will be saved to:{R} {fname}")
-
-    print_banner()
-    print(f"  {C.CYAN}{B}● STARTING SCAN{R}\n")
-    run_scanner(*args)
-
-
-def menu_deep_scan(cfg: dict):
-    """Dedicated deep scan entry."""
-    print_banner()
-    print(f"  {C.MAGENTA}{B}● DEEP SCAN{R}\n")
-    print(f"  {C.LIGHTBLACK_EX}Deep scan checks:{R}")
-    print(f"  {C.LIGHTBLACK_EX}  · File contents (all branches){R}")
-    print(f"  {C.LIGHTBLACK_EX}  · Full commit history (catches deleted secrets!){R}")
-    print(f"  {C.LIGHTBLACK_EX}  · Pull request diffs & comments{R}")
-    print(f"  {C.LIGHTBLACK_EX}  · Issues & issue comments{R}")
-    print(f"  {C.LIGHTBLACK_EX}  · Gists by the repo owner{R}")
-    print()
-
-    target = ask("  Enter repo (owner/repo or URL): ")
+        target = ask("GitHub username:")
     if not target:
         return
 
-    max_commits = ask("  Max commits to scan (default 500): ", default="500")
-    workers = str(cfg.get("workers", 8))
-
-    output_choice = questionary.select(
-        "Save report?",
-        choices=[
-            questionary.Choice("  📄  HTML", "html"),
-            questionary.Choice("  📊  JSON", "json"),
-            questionary.Choice("  ✗   Terminal only", "none"),
-        ],
-        style=MENU_STYLE,
-    ).ask()
-    if output_choice is None:
-        return
-
-    args = ["--repo", target, "--mode", "deep", "--workers", workers]
-    if cfg.get("token"):
-        args += ["--token", cfg["token"]]
-    if output_choice != "none":
-        fname = f"deep-{target.replace('/', '-')}.{output_choice}"
-        args += ["--output", fname]
-
-    print_banner()
-    print(f"  {C.MAGENTA}{B}● DEEP SCANNING: {target}{R}\n")
-    run_scanner(*args)
-
-
-def menu_global_scan(cfg: dict):
-    """Global GitHub code search."""
-    print_banner()
-    print(f"  {C.YELLOW}{B}● GLOBAL SCAN{R}\n")
-    print(f"  {C.LIGHTBLACK_EX}Searches across ALL of public GitHub for leaked secrets.{R}")
-    print(f"  {C.RED}⚠  Requires a GitHub token (rate limits apply).{R}\n")
-
-    if not cfg.get("token"):
-        print(f"  {C.RED}✗ No GitHub token configured. Please set one in Settings first.{R}")
-        input(f"\n  {C.LIGHTBLACK_EX}Press Enter…{R}")
-        return
-
-    mode = questionary.select(
-        "Global scan mode:",
-        choices=[
-            questionary.Choice("  🌐  Auto — run all 50+ built-in search queries", "auto"),
-            questionary.Choice("  🔎  Custom — enter your own search term",         "custom"),
-        ],
-        style=MENU_STYLE,
-    ).ask()
+    mode = choose("Scan mode:", [
+        questionary.Choice("  ⚡  Fast      — files only, no verify",       "fast"),
+        questionary.Choice("  🔍  Standard  — files + key verify",          "standard"),
+        questionary.Choice("  🔬  Deep      — files + commits + PRs + issues", "deep"),
+    ])
     if not mode:
         return
 
-    query = None
+    fmt = choose("Save report?", [
+        questionary.Choice("  🌐  HTML  (dark theme)",   "html"),
+        questionary.Choice("  📊  JSON  (machine read)", "json"),
+        questionary.Choice("  📋  CSV   (spreadsheet)",  "csv"),
+        questionary.Choice("  ✗   Terminal only",        "none"),
+    ])
+    if fmt is None:
+        return
+
+    args = (["--repo", target] if target_type == "repo"
+            else ["--user", target])
+    args += ["--mode", mode, "--workers", str(cfg.get("workers", 8))]
+    if cfg.get("token"):
+        args += ["--token", cfg["token"]]
+    if mode == "fast":
+        args += ["--no-verify"]
+    if fmt != "none":
+        safe_target = target.replace("/", "-").replace("\\", "-")[:40]
+        fname = f"report-{safe_target}.{fmt}"
+        args += ["--output", fname]
+        print(f"\n  {C.CYAN}▸ Report → {fname}{R}")
+
+    hdr(f"🔍  SCANNING: {target}", C.CYAN)
+    run_scanner(*args)
+
+# ── DEEP SCAN menu ────────────────────────────────────────────
+def menu_deep(cfg: dict):
+    hdr("🔬  DEEP SCAN", C.MAGENTA)
+    print(f"  {C.LIGHTBLACK_EX}Scans: files · commits · PRs · issues · gists{R}\n")
+
+    target = ask("Repo  (owner/repo or URL):")
+    if not target:
+        return
+
+    fmt = choose("Save report?", [
+        questionary.Choice("  🌐  HTML", "html"),
+        questionary.Choice("  📊  JSON", "json"),
+        questionary.Choice("  ✗   Terminal only", "none"),
+    ])
+    if fmt is None:
+        return
+
+    args = ["--repo", target, "--mode", "deep",
+            "--workers", str(cfg.get("workers", 8))]
+    if cfg.get("token"):
+        args += ["--token", cfg["token"]]
+    if fmt != "none":
+        safe_target = target.replace("/", "-").replace("\\", "-")[:40]
+        args += ["--output", f"deep-{safe_target}.{fmt}"]
+
+    hdr(f"🔬  DEEP SCAN: {target}", C.MAGENTA)
+    run_scanner(*args)
+
+# ── GLOBAL SCAN menu ──────────────────────────────────────────
+def menu_global(cfg: dict):
+    hdr("🌐  GLOBAL SCAN", C.YELLOW)
+    print(f"  {C.LIGHTBLACK_EX}Searches all of public GitHub.{R}")
+
+    if not cfg.get("token"):
+        print(f"  {C.RED}✗ No token. Set one in Settings first.{R}")
+        input(f"\n  {C.LIGHTBLACK_EX}↵ Enter…{R}")
+        return
+
+    mode = choose("Query mode:", [
+        questionary.Choice("  🤖  Auto  — 50+ built-in queries", "auto"),
+        questionary.Choice("  🔎  Custom — enter search term",    "custom"),
+    ])
+    if not mode:
+        return
+
+    query = "AKIA"
     if mode == "custom":
-        query = ask("  Search term (e.g. AKIA, sk_live_, ghp_): ")
+        query = ask("Search term (e.g. sk_live_, ghp_):")
         if not query:
             return
 
-    max_results = ask("  Max results per query (default 30): ", default="30")
-
-    output_choice = questionary.select(
-        "Save report?",
-        choices=[
-            questionary.Choice("  📄  HTML",          "html"),
-            questionary.Choice("  📊  JSON",          "json"),
-            questionary.Choice("  ✗   Terminal only", "none"),
-        ],
-        style=MENU_STYLE,
-    ).ask()
-    if output_choice is None:
+    limit = ask("Max results per query:", default="30")
+    fmt = choose("Save report?", [
+        questionary.Choice("  🌐  HTML", "html"),
+        questionary.Choice("  📊  JSON", "json"),
+        questionary.Choice("  ✗   Terminal only", "none"),
+    ])
+    if fmt is None:
         return
 
-    args = ["--token", cfg["token"], "--max-results", max_results]
-    if mode == "auto":
-        args += ["--global", "AKIA"]  # triggers built-in query list
-    else:
-        args += ["--global", query]
+    args = ["--global", query, "--token", cfg["token"],
+            "--max-results", limit]
+    if fmt != "none":
+        args += ["--output", f"global-scan.{fmt}"]
 
-    if output_choice != "none":
-        fname = f"global-scan.{output_choice}"
-        args += ["--output", fname]
-
-    print_banner()
-    print(f"  {C.YELLOW}{B}● GLOBAL SCAN IN PROGRESS…{R}\n")
+    hdr("🌐  GLOBAL SCAN RUNNING…", C.YELLOW)
     run_scanner(*args)
 
-
+# ── VAULT menu ────────────────────────────────────────────────
 def menu_vault(cfg: dict):
-    """Leaked keys vault viewer."""
-    print_banner()
-    print(f"  {C.RED}{B}● LEAKED KEYS VAULT{R}\n")
-    print(f"  {C.LIGHTBLACK_EX}All confirmed live/found keys from previous scans.{R}")
-    print(f"  {C.LIGHTBLACK_EX}Raw values are never stored — SHA-256 hashed only.{R}\n")
+    hdr("🏦  VAULT", C.RED)
+    print(f"  {C.LIGHTBLACK_EX}Confirmed findings from all scans.{R}")
+    print(f"  {C.LIGHTBLACK_EX}Raw values never stored (SHA-256 hashed).{R}\n")
 
-    choice = questionary.select(
-        "What do you want to do?",
-        choices=[
-            questionary.Choice("  👁   View vault in terminal",               "view"),
-            questionary.Choice("  📊  Export vault to JSON",                 "export_json"),
-            questionary.Choice("  📋  Export vault to CSV",                  "export_csv"),
-            questionary.Choice("  ◀   Back",                                 "back"),
-        ],
-        style=MENU_STYLE,
-    ).ask()
-
-    if not choice or choice == "back":
+    act = choose("Action:", [
+        questionary.Choice("  👁   View in terminal",  "view"),
+        questionary.Choice("  📊  Export → JSON",      "json"),
+        questionary.Choice("  📋  Export → CSV",       "csv"),
+        questionary.Choice("  ◀   Back",               "back"),
+    ])
+    if not act or act == "back":
         return
-
-    if choice == "view":
+    if act == "view":
         run_scanner("--stats")
-    elif choice == "export_json":
-        run_scanner("--stats", "--output", "vault-export.json")
-    elif choice == "export_csv":
-        run_scanner("--stats", "--output", "vault-export.csv")
+    else:
+        run_scanner("--stats", "--output", f"vault.{act}")
 
-
+# ── STATS menu ────────────────────────────────────────────────
 def menu_stats(cfg: dict):
-    """Intelligence dashboard."""
-    print_banner()
-    print(f"  {C.CYAN}{B}● INTELLIGENCE DASHBOARD{R}\n")
-    print(f"  {C.LIGHTBLACK_EX}Shows what the engine has learned from all scans.{R}\n")
+    hdr("📊  INTELLIGENCE DASHBOARD", C.CYAN)
     run_scanner("--stats")
 
-
+# ── SETTINGS menu ────────────────────────────────────────────
 def menu_settings(cfg: dict) -> dict:
-    """Settings editor."""
     while True:
-        print_banner()
-        print(f"  {C.YELLOW}{B}● SETTINGS{R}\n")
-        print(f"  {C.LIGHTBLACK_EX}Current configuration:{R}\n")
-        print(f"    {C.CYAN}GitHub Token     :{R}  {mask(cfg.get('token',''))}")
-        print(f"    {C.CYAN}Workers          :{R}  {cfg.get('workers', 8)}")
-        print(f"    {C.CYAN}Notify severity  :{R}  {cfg.get('notify_severity','HIGH')}")
-        print(f"    {C.CYAN}Telegram token   :{R}  {mask(cfg.get('telegram_token',''))}")
-        print(f"    {C.CYAN}Telegram chat ID :{R}  {mask(cfg.get('telegram_chat_id',''))}")
-        print(f"    {C.CYAN}Discord webhook  :{R}  {mask(cfg.get('discord_webhook',''))}")
-        print(f"    {C.CYAN}Slack webhook    :{R}  {mask(cfg.get('slack_webhook',''))}")
+        hdr("⚙   SETTINGS", C.YELLOW)
+
+        # Status table
+        rows = [
+            ("GitHub Token",    mask(cfg.get("token",""))),
+            ("Workers",         f"{C.CYAN}{cfg.get('workers',8)}{R}"),
+            ("Alert severity",  f"{C.CYAN}{cfg.get('notify_severity','HIGH')}{R}"),
+            ("Telegram token",  mask(cfg.get("telegram_token",""))),
+            ("Telegram chat",   mask(cfg.get("telegram_chat_id",""))),
+            ("Discord webhook", mask(cfg.get("discord_webhook",""))),
+            ("Slack webhook",   mask(cfg.get("slack_webhook",""))),
+        ]
+        for label, val in rows:
+            print(f"  {C.LIGHTBLACK_EX}{label:<16}{R}  {val}")
         print()
 
-        choice = questionary.select(
-            "What do you want to change?",
-            choices=[
-                questionary.Choice("  🔑  GitHub Token          (required for most features)", "token"),
-                questionary.Choice("  ⚙   Workers               (parallel scan threads)",      "workers"),
-                questionary.Choice("  🔔  Notification severity (CRITICAL/HIGH/MEDIUM/LOW)",   "severity"),
-                questionary.Choice("  📱  Telegram notifications",                             "telegram"),
-                questionary.Choice("  💬  Discord notifications",                              "discord"),
-                questionary.Choice("  💼  Slack notifications",                                "slack"),
-                questionary.Choice("  💾  Save & return",                                      "save"),
-            ],
-            style=MENU_STYLE,
-        ).ask()
+        act = choose("Change:", [
+            questionary.Choice("  🔑  GitHub Token",       "token"),
+            questionary.Choice("  ⚙   Workers",            "workers"),
+            questionary.Choice("  🔔  Alert severity",     "severity"),
+            questionary.Choice("  📱  Telegram",           "telegram"),
+            questionary.Choice("  💬  Discord",            "discord"),
+            questionary.Choice("  💼  Slack",              "slack"),
+            questionary.Choice("  💾  Save & return",      "save"),
+        ])
 
-        if not choice or choice == "save":
-            save_config(cfg)
-            print(f"\n  {C.GREEN}✓ Settings saved to {CONFIG_FILE}{R}")
+        if not act or act == "save":
+            save_cfg(cfg)
+            print(f"\n  {C.GREEN}✓ Saved → {CONFIG_FILE}{R}")
             time.sleep(1)
             break
 
-        elif choice == "token":
-            val = ask("  Paste your GitHub token (ghp_…): ", password=True)
-            if val:
-                cfg["token"] = val
+        elif act == "token":
+            v = ask("GitHub token (ghp_…):", password=True)
+            if v:
+                cfg["token"] = v
 
-        elif choice == "workers":
-            val = ask("  Number of workers (1-32): ", default=str(cfg.get("workers", 8)))
+        elif act == "workers":
+            v = ask("Workers (1–32):", default=str(cfg.get("workers", 8)))
             try:
-                w = int(val)
-                if 1 <= w <= 32:
-                    cfg["workers"] = w
+                n = int(v)
+                if 1 <= n <= 32:
+                    cfg["workers"] = n
                 else:
-                    print(f"  {C.RED}Must be between 1 and 32{R}")
+                    print(f"  {C.RED}Must be 1–32{R}")
                     time.sleep(1)
             except ValueError:
                 pass
 
-        elif choice == "severity":
-            val = questionary.select(
-                "Alert on severity:",
-                choices=["CRITICAL", "HIGH", "MEDIUM", "LOW"],
-                style=MENU_STYLE,
-            ).ask()
-            if val:
-                cfg["notify_severity"] = val
+        elif act == "severity":
+            v = choose("Alert on severity:", ["CRITICAL", "HIGH", "MEDIUM", "LOW"])
+            if v:
+                cfg["notify_severity"] = v
 
-        elif choice == "telegram":
-            cfg["telegram_token"] = ask("  Telegram bot token: ", password=True,
-                                         default=cfg.get("telegram_token", ""))
-            cfg["telegram_chat_id"] = ask("  Telegram chat ID: ",
-                                           default=cfg.get("telegram_chat_id", ""))
+        elif act == "telegram":
+            v = ask("Bot token:", password=True,
+                    default=cfg.get("telegram_token", ""))
+            if v:
+                cfg["telegram_token"] = v
+            v2 = ask("Chat ID:", default=cfg.get("telegram_chat_id", ""))
+            if v2:
+                cfg["telegram_chat_id"] = v2
 
-        elif choice == "discord":
-            cfg["discord_webhook"] = ask("  Discord webhook URL: ", password=True,
-                                          default=cfg.get("discord_webhook", ""))
+        elif act == "discord":
+            v = ask("Webhook URL:", password=True,
+                    default=cfg.get("discord_webhook", ""))
+            if v:
+                cfg["discord_webhook"] = v
 
-        elif choice == "slack":
-            cfg["slack_webhook"] = ask("  Slack webhook URL: ", password=True,
-                                        default=cfg.get("slack_webhook", ""))
+        elif act == "slack":
+            v = ask("Webhook URL:", password=True,
+                    default=cfg.get("slack_webhook", ""))
+            if v:
+                cfg["slack_webhook"] = v
 
     return cfg
 
-
+# ── HELP ─────────────────────────────────────────────────────
 def menu_help():
-    print_banner()
-    print(f"  {C.CYAN}{B}● HELP & QUICK REFERENCE{R}\n")
-    rows = [
-        ("Scan a repo",        "python scanner.py --repo owner/repo --mode standard"),
-        ("Scan a user",        "python scanner.py --user username"),
-        ("Deep scan",          "python scanner.py --repo owner/repo --mode deep"),
-        ("Global scan",        "python scanner.py --global AKIA"),
-        ("Export HTML",        "python scanner.py --repo owner/repo --output report.html"),
-        ("Export CSV",         "python scanner.py --user target --output report.csv"),
-        ("View stats",         "python scanner.py --stats"),
-        ("Skip verification",  "python scanner.py --repo owner/repo --no-verify"),
-        ("Set token via env",  "export GITHUB_TOKEN=ghp_yourtoken"),
-        ("Android install",    "bash <(curl -fsSL .../install.sh)  # see TERMUX.md"),
+    hdr("❓  HELP", C.CYAN)
+    cmds = [
+        ("menu",     "python menu.py"),
+        ("scan repo","scanner.py --repo owner/repo"),
+        ("scan user","scanner.py --user username"),
+        ("deep scan","scanner.py --repo x --mode deep"),
+        ("global",   "scanner.py --global AKIA"),
+        ("HTML out", "scanner.py --repo x --output r.html"),
+        ("stats",    "scanner.py --stats"),
+        ("fast mode","scanner.py --repo x --no-verify"),
+        ("set token","export GITHUB_TOKEN=ghp_xxx"),
+        ("update",   "cd Auto-Cronfig && git pull"),
     ]
-    for label, cmd in rows:
-        print(f"  {C.YELLOW}▸ {C.WHITE}{label:<22}{R}  {C.LIGHTBLACK_EX}{cmd}{R}")
+    for label, cmd in cmds:
+        print(f"  {C.YELLOW}▸ {C.WHITE}{label:<12}{R}  {C.LIGHTBLACK_EX}{cmd}{R}")
+    print()
+    print(f"  {C.CYAN}Docs:   {R}github.com/ITzmeMod/Auto-Cronfig")
+    print(f"  {C.CYAN}Android:{R} see TERMUX.md")
+    print()
+    input(f"  {C.LIGHTBLACK_EX}↵ Enter to return…{R}")
 
-    print(f"\n  {C.CYAN}Documentation:{R}  https://github.com/ITzmeMod/Auto-Cronfig")
-    print(f"  {C.CYAN}Android guide:{R}  TERMUX.md\n")
-    input(f"  {C.LIGHTBLACK_EX}Press Enter to return…{R}")
-
-
+# ── ABOUT ─────────────────────────────────────────────────────
 def menu_about():
-    print_banner()
-    print(f"  {C.CYAN}{B}● ABOUT AUTO-CRONFIG{R}\n")
-    print(f"  {C.WHITE}Version   {C.LIGHTBLACK_EX}·{R}  v3.0.0")
-    print(f"  {C.WHITE}Author    {C.LIGHTBLACK_EX}·{R}  ITzmeMod")
-    print(f"  {C.WHITE}License   {C.LIGHTBLACK_EX}·{R}  MIT — free to use, modify, distribute")
-    print(f"  {C.WHITE}Repo      {C.LIGHTBLACK_EX}·{R}  https://github.com/ITzmeMod/Auto-Cronfig")
-    print(f"  {C.WHITE}Patterns  {C.LIGHTBLACK_EX}·{R}  208+ across 15 categories")
-    print(f"  {C.WHITE}Tests     {C.LIGHTBLACK_EX}·{R}  111 passing")
+    hdr("ℹ   ABOUT", C.CYAN)
+    info = [
+        ("Version",   "v3.0.0"),
+        ("Author",    "ITzmeMod"),
+        ("License",   "MIT"),
+        ("Patterns",  "208+ across 15 categories"),
+        ("Tests",     "111 passing"),
+        ("Engine",    "Python + Node.js (axios+cheerio)"),
+        ("Memory",    "SQLite self-learning"),
+        ("Platforms", "Linux · macOS · WSL · Android"),
+    ]
+    for k, v in info:
+        print(f"  {C.LIGHTBLACK_EX}{k:<12}{R}  {C.WHITE}{v}{R}")
     print()
-    print(f"  {C.LIGHTBLACK_EX}Built with Python + Node.js (axios + cheerio){R}")
-    print(f"  {C.LIGHTBLACK_EX}SQLite-powered self-improving intelligence engine{R}")
-    print(f"  {C.LIGHTBLACK_EX}Runs on Linux · macOS · Windows WSL · Android (Termux){R}")
+    print(f"  {C.CYAN}github.com/ITzmeMod/Auto-Cronfig{R}")
     print()
-    input(f"  {C.LIGHTBLACK_EX}Press Enter to return…{R}")
+    input(f"  {C.LIGHTBLACK_EX}↵ Enter to return…{R}")
 
-
-# ── Main menu loop ────────────────────────────────────────────────────────────
-
+# ── MAIN MENU ─────────────────────────────────────────────────
 def main():
-    cfg = load_config()
+    logging.basicConfig(level=logging.WARNING,
+                        format="%(levelname)s %(name)s: %(message)s")
+    cfg = load_cfg()
 
-    # Apply env token if set and not already in config
-    env_token = os.environ.get("GITHUB_TOKEN", "")
-    if env_token and not cfg.get("token"):
-        cfg["token"] = env_token
+    # Pick up token from env if not already saved
+    env_tok = os.environ.get("GITHUB_TOKEN", "")
+    if env_tok and not cfg.get("token"):
+        cfg["token"] = env_tok
 
     while True:
-        print_banner()
-        print_status_bar(cfg)
+        clr()
+        _banner()
+        _statusbar(cfg)
 
-        choice = questionary.select(
-            "Main Menu  — use ↑↓ arrows and Enter to select:",
-            choices=[
-                questionary.Choice("  🔍  Scan         Scan a repo or user for secrets",       "scan"),
-                questionary.Choice("  🔬  Deep Scan    Full audit: commits, PRs, issues, gists","deep"),
-                questionary.Choice("  🌐  Global Scan  Search across all of public GitHub",     "global"),
-                questionary.Choice("  🏦  Vault        View & export leaked keys vault",        "vault"),
-                questionary.Choice("  📊  Stats        Intelligence dashboard & insights",      "stats"),
-                questionary.Choice("  ⚙   Settings     Configure token, workers, notifications","settings"),
-                questionary.Choice("  ❓  Help         CLI reference & docs",                   "help"),
-                questionary.Choice("  ℹ   About        Version & info",                         "about"),
-                questionary.Choice("  ✖   Exit",                                                "exit"),
+        choice = choose(
+            "Main Menu  ↑↓ navigate · Enter select · Ctrl+C exit",
+            [
+                questionary.Choice("  🔍  Scan         Scan repo / user",       "scan"),
+                questionary.Choice("  🔬  Deep Scan    Commits·PRs·Issues·Gists","deep"),
+                questionary.Choice("  🌐  Global       Search all of GitHub",    "global"),
+                questionary.Choice("  🏦  Vault        Leaked keys vault",       "vault"),
+                questionary.Choice("  📊  Stats        Intelligence dashboard",  "stats"),
+                questionary.Choice("  ⚙   Settings     Token · workers · alerts","settings"),
+                questionary.Choice("  ❓  Help         Quick reference",         "help"),
+                questionary.Choice("  ℹ   About        Version & info",          "about"),
+                questionary.Choice("  ✖   Exit",                                 "exit"),
             ],
-            style=MENU_STYLE,
-        ).ask()
+        )
 
         if not choice or choice == "exit":
-            print_banner()
-            print(f"  {C.CYAN}Thanks for using Auto-Cronfig. Stay secure. 🔒{R}\n")
+            clr()
+            _banner()
+            print(f"  {C.CYAN}Stay secure. 🔒{R}\n")
             break
-        elif choice == "scan":
-            menu_scan(cfg)
-        elif choice == "deep":
-            menu_deep_scan(cfg)
-        elif choice == "global":
-            menu_global_scan(cfg)
-        elif choice == "vault":
-            menu_vault(cfg)
-        elif choice == "stats":
-            menu_stats(cfg)
-        elif choice == "settings":
-            cfg = menu_settings(cfg)
-        elif choice == "help":
-            menu_help()
-        elif choice == "about":
-            menu_about()
+        elif choice == "scan":       menu_scan(cfg)
+        elif choice == "deep":       menu_deep(cfg)
+        elif choice == "global":     menu_global(cfg)
+        elif choice == "vault":      menu_vault(cfg)
+        elif choice == "stats":      menu_stats(cfg)
+        elif choice == "settings":   cfg = menu_settings(cfg)
+        elif choice == "help":       menu_help()
+        elif choice == "about":      menu_about()
 
 
 if __name__ == "__main__":
