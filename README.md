@@ -13,7 +13,7 @@
 [![Android](https://img.shields.io/badge/Android-Termux%20Ready-3DDC84?logo=android&logoColor=white)](TERMUX.md)
 [![Open Source](https://img.shields.io/badge/Open-Source-orange?logo=github)](https://github.com/ITzmeMod/Auto-Cronfig)
 
-[Features](#-features) · [Install](#-installation) · [Usage](#-usage) · [Scan Modes](#-scan-modes) · [Key Verification](#-key-verification) · [Memory & Learning](#-memory--learning-system) · [Notifications](#-notifications) · [Android](#-android--termux) · [Contributing](#-contributing)
+[Features](#-features) · [Install](#-installation) · [Interactive Menu](#-interactive-menu) · [Usage](#-usage) · [Scan Modes](#-scan-modes) · [Key Verification](#-key-verification) · [Memory & Learning](#-memory--learning-system) · [Notifications](#-notifications) · [Android](#-android--termux) · [Contributing](#-contributing)
 
 </div>
 
@@ -165,10 +165,57 @@ npm install
 
 ---
 
+## 🎛️ Interactive Menu
+
+No need to memorize commands. Just run:
+
+```bash
+python menu.py
+```
+
+You'll see the ASCII banner and a fully interactive menu:
+
+```
+  ╔═══════════════════════════════════════════════════════════════╗
+  ║                                                               ║
+  ║   █████╗ ██╗   ██╗████████╗██████╗       ██████╗ ███████╗    ║
+  ║  ██╔══██╗██║   ██║╚══██╔══╝██╔═══██╗     ██╔════╝██╔════╝    ║
+  ║  ███████║██║   ██║   ██║   ██║   ██║     ██║     █████╗      ║
+  ║  ██╔══██║██║   ██║   ██║   ██║   ██║     ██║     ██╔══╝      ║
+  ║  ██║  ██║╚██████╔╝   ██║   ╚██████╔╝     ╚██████╗██║         ║
+  ║  ╚═╝  ╚═╝ ╚═════╝    ╚═╝    ╚═════╝       ╚═════╝╚═╝         ║
+  ║                                                               ║
+  ║  ▸ C R O N F I G  ·  GitHub Secret Scanner  ·  v3.0.0        ║
+  ╚═══════════════════════════════════════════════════════════════╝
+
+  ● Token set  │  Workers: 8  │  DB: ~/.auto-cronfig/memory.db
+
+  Main Menu — use ↑↓ arrows and Enter to select:
+  ❯  🔍  Scan         Scan a repo or user for secrets
+     🔬  Deep Scan    Full audit: commits, PRs, issues, gists
+     🌐  Global Scan  Search across all of public GitHub
+     🏦  Vault        View & export leaked keys vault
+     📊  Stats        Intelligence dashboard & insights
+     ⚙   Settings     Configure token, workers, notifications
+     ❓  Help         CLI reference & docs
+     ℹ   About        Version & info
+     ✖   Exit
+```
+
+**Navigate with `↑` `↓` arrow keys, press `Enter` to select.** No flags to memorize.
+
+> Settings are saved to `~/.auto-cronfig/config.json` — set your GitHub token once and it's remembered.
+
+---
+
 ## 🚀 Usage
 
 ### Quick Start
 ```bash
+# Launch interactive menu (recommended)
+python menu.py
+
+# Or use CLI directly:
 # Scan a repository
 python scanner.py --repo owner/repo
 
