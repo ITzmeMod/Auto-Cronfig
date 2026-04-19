@@ -263,10 +263,11 @@ class AutoCronfig:
             cmd += ["--query", safe_query]
 
         try:
-            result = subprocess.run(
+            result = subprocess.run(  # nosec B603 — cmd uses allowlist-validated mode + sanitized query
                 cmd,
                 capture_output=True,
                 text=True,
+                shell=False,
                 timeout=120,
                 cwd=str(scraper_path.parent.parent),
             )

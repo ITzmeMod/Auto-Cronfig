@@ -389,9 +389,11 @@ class Memory:
         col = col_map.get(verified_status.upper())
         if col is None:
             return
-        # Safety assertion: col must be in the explicit allowlist before
+        # Safety check: col must be in the explicit allowlist before
         # being interpolated into the SQL query string.
-        assert col in _ALLOWED_STAT_COLS, f"Unexpected column name: {col!r}"
+        # Using if/raise instead of assert so it works in optimised bytecode (-O).
+        if col not in _ALLOWED_STAT_COLS:
+            raise ValueError(f"[memory] Unexpected column name: {col!r} — possible injection attempt")
         # Column names come from a controlled allowlist, not user input — safe.
         # col is allowlist-validated above — safe to interpolate  # nosec B608
         sql = (  # nosec B608

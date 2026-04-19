@@ -9,8 +9,11 @@ import sys
 import time
 import json
 import shutil
-import subprocess
+import logging
+import subprocess  # nosec B404 — used with fixed args, shell=False
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # ── Dependency check ─────────────────────────────────────────────────────────
 _missing = []
@@ -53,18 +56,37 @@ CONFIG_FILE = Path.home() / ".auto-cronfig" / "config.json"
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def clear():
-    os.system("cls" if os.name == "nt" else "clear")
+    # Use ANSI escape to clear screen — avoids shell invocation (fixes B605)
+    if os.name == "nt":
+        # cmd.exe is a Windows system binary — partial path is intentional (nosec B607)
+        subprocess.run(["cmd", "/c", "cls"], shell=False)  # nosec B603 B607
+    else:
+        # ANSI clear + cursor home — no subprocess needed
+        sys.stdout.write("\033[2J\033[H")
+        sys.stdout.flush()
+
+
+# Default config uses empty strings as unset sentinels — not passwords (nosec B105)
+_DEFAULT_CONFIG: dict = {  # nosec B105
+    "token": "",
+    "workers": 8,
+    "notify_severity": "HIGH",
+    "telegram_token": "",       # nosec B105
+    "telegram_chat_id": "",
+    "discord_webhook": "",      # nosec B105
+    "slack_webhook": "",        # nosec B105
+}
 
 
 def load_config() -> dict:
     if CONFIG_FILE.exists():
         try:
-            return json.loads(CONFIG_FILE.read_text())
-        except Exception:
-            pass
-    return {"token": "", "workers": 8, "notify_severity": "HIGH",
-            "telegram_token": "", "telegram_chat_id": "",
-            "discord_webhook": "", "slack_webhook": ""}
+            data = json.loads(CONFIG_FILE.read_text())
+            # Merge with defaults so new keys are always present
+            return {**_DEFAULT_CONFIG, **data}
+        except Exception as exc:
+            logger.warning("[menu] Failed to load config: %s", exc)
+    return dict(_DEFAULT_CONFIG)
 
 
 def save_config(cfg: dict):
@@ -79,11 +101,22 @@ def mask(s: str) -> str:
 
 
 def run_scanner(*args):
-    """Hand off to scanner.py with given args, then pause."""
-    cmd = [sys.executable, str(Path(__file__).parent / "scanner.py"), *args]
+    """Hand off to scanner.py with given args, then pause.
+
+    Only sys.executable (trusted Python binary) and scanner.py (local file)
+    are passed as the command — no user input reaches the command list directly.
+    All user-supplied values (repo, user, token) are passed as separate list
+    elements so the OS never interprets them as shell tokens (shell=False).
+    """
+    scanner_path = Path(__file__).parent / "scanner.py"
+    # Validate scanner exists before calling
+    if not scanner_path.is_file():
+        print(f"\n{C.RED}  ✗ scanner.py not found at {scanner_path}{R}")
+        return
+    cmd = [sys.executable, str(scanner_path), *args]  # nosec B603
     print()
     try:
-        subprocess.run(cmd)
+        subprocess.run(cmd, shell=False)  # nosec B603 — fixed binary, no shell
     except KeyboardInterrupt:
         print(f"\n{C.YELLOW}  ⚠  Scan interrupted.{R}")
     input(f"\n  {C.LIGHTBLACK_EX}Press Enter to return to menu…{R}")
