@@ -1,47 +1,115 @@
 """
-Pattern registry for Auto-Cronfig v2.
-Each entry includes regex, severity, category, verifier ref, and description.
+Pattern registry for Auto-Cronfig v3.
+Loads 200+ patterns from data/patterns_extended.json at runtime.
+Hardcoded fallback ensures the module works without the JSON file.
 """
 
-PATTERNS = {
-    # ── AWS ──────────────────────────────────────────────────────────────
+import re
+import json
+import os
+from pathlib import Path
+from typing import List, Dict, Any, Optional
+
+# ── Locate data file ──────────────────────────────────────────────────────────
+_HERE = Path(__file__).parent.parent  # repo root
+_PATTERNS_JSON = _HERE / "data" / "patterns_extended.json"
+
+# ── RISKY_FILENAMES ────────────────────────────────────────────────────────────
+RISKY_FILENAMES = [
+    ".env",
+    ".env.local",
+    ".env.production",
+    ".env.staging",
+    ".env.development",
+    ".env.test",
+    ".pem",
+    ".key",
+    ".p12",
+    ".pfx",
+    ".jks",
+    ".keystore",
+    "id_rsa",
+    "id_ed25519",
+    "id_ecdsa",
+    "id_dsa",
+    "credentials.json",
+    "secrets.json",
+    "secrets.yaml",
+    "secrets.yml",
+    "config.json",
+    "wp-config.php",
+    "settings.py",
+    "database.yml",
+    "database.yaml",
+    "application.yml",
+    "application.properties",
+    ".netrc",
+    ".pgpass",
+    ".npmrc",
+    ".pypirc",
+    "terraform.tfvars",
+    "terraform.tfstate",
+]
+
+# ── RISKY_CONTENT_SIGNALS ──────────────────────────────────────────────────────
+RISKY_CONTENT_SIGNALS = [
+    "api_key",
+    "apikey",
+    "api-key",
+    "secret",
+    "password",
+    "passwd",
+    "token",
+    "private_key",
+    "privatekey",
+    "credentials",
+    "access_key",
+    "accesskey",
+    "auth",
+    "authorization",
+    "AKIA",
+    "sk_live",
+    "sk_test",
+    "SG.",
+    "xoxb-",
+    "xoxp-",
+    "ghp_",
+    "gho_",
+    "glpat-",
+    "hf_",
+    "sk-ant",
+    "-----BEGIN",
+    # Database connection signals
+    "postgres://",
+    "postgresql://",
+    "mysql://",
+    "mongodb://",
+    "mongodb+srv://",
+    "redis://",
+    "database_url",
+    "db_url",
+    "connection_string",
+    # Generic env patterns
+    "_url=",
+    "_uri=",
+]
+
+# ── Hardcoded fallback patterns (subset for offline use) ─────────────────────
+_FALLBACK_PATTERNS: Dict[str, Dict[str, Any]] = {
     "AWS Access Key": {
         "regex": r"(?:AKIA|ABIA|ACCA|ASIA)[0-9A-Z]{16}",
         "severity": "CRITICAL",
-        "category": "cloud",
+        "category": "cloud-aws",
         "verifier": "aws_access_key",
         "description": "AWS IAM Access Key ID",
     },
-    "AWS Secret Key": {
-        "regex": r"(?i)aws[_\-\s]*secret[_\-\s]*(?:access[_\-\s]*)?key[\s]*[=:\"']+\s*([A-Za-z0-9/+=]{40})",
-        "severity": "CRITICAL",
-        "category": "cloud",
-        "verifier": None,
-        "description": "AWS IAM Secret Access Key",
-    },
-    # ── Google ───────────────────────────────────────────────────────────
     "Google API Key": {
         "regex": r"AIza[0-9A-Za-z\-_]{35}",
         "severity": "HIGH",
-        "category": "cloud",
+        "category": "cloud-google",
         "verifier": "google_api_key",
         "description": "Google API Key",
     },
-    "Google OAuth Client Secret": {
-        "regex": r"GOCSPX-[0-9A-Za-z\-_]{28}",
-        "severity": "HIGH",
-        "category": "cloud",
-        "verifier": None,
-        "description": "Google OAuth Client Secret",
-    },
-    "Google OAuth Token": {
-        "regex": r"ya29\.[0-9A-Za-z\-_]+",
-        "severity": "CRITICAL",
-        "category": "cloud",
-        "verifier": None,
-        "description": "Google OAuth Access Token",
-    },
-    # ── Stripe ───────────────────────────────────────────────────────────
     "Stripe Live Key": {
         "regex": r"sk_live_[0-9a-zA-Z]{24,}",
         "severity": "CRITICAL",
@@ -56,66 +124,6 @@ PATTERNS = {
         "verifier": "stripe_key",
         "description": "Stripe Test Secret Key",
     },
-    "Stripe Publishable Key": {
-        "regex": r"pk_(?:live|test)_[0-9a-zA-Z]{24,}",
-        "severity": "LOW",
-        "category": "payment",
-        "verifier": None,
-        "description": "Stripe Publishable Key",
-    },
-    # ── Twilio ───────────────────────────────────────────────────────────
-    "Twilio Account SID": {
-        "regex": r"AC[0-9a-fA-F]{32}",
-        "severity": "HIGH",
-        "category": "communication",
-        "verifier": None,
-        "description": "Twilio Account SID",
-    },
-    "Twilio Auth Token": {
-        "regex": r"(?i)twilio[_\-\s]*auth[_\-\s]*token[\s]*[=:\"']+\s*([0-9a-f]{32})",
-        "severity": "CRITICAL",
-        "category": "communication",
-        "verifier": None,
-        "description": "Twilio Auth Token",
-    },
-    # ── Slack ────────────────────────────────────────────────────────────
-    "Slack Bot Token": {
-        "regex": r"xoxb-[0-9]{10,13}-[0-9]{10,13}-[a-zA-Z0-9]{24}",
-        "severity": "HIGH",
-        "category": "communication",
-        "verifier": "slack_token",
-        "description": "Slack Bot Token",
-    },
-    "Slack User Token": {
-        "regex": r"xoxp-[0-9]{10,13}-[0-9]{10,13}-[0-9]{10,13}-[a-zA-Z0-9]{32}",
-        "severity": "HIGH",
-        "category": "communication",
-        "verifier": "slack_token",
-        "description": "Slack User Token",
-    },
-    "Slack Webhook URL": {
-        "regex": r"https://hooks\.slack\.com/services/T[A-Z0-9]+/B[A-Z0-9]+/[a-zA-Z0-9]+",
-        "severity": "HIGH",
-        "category": "communication",
-        "verifier": None,
-        "description": "Slack Incoming Webhook URL",
-    },
-    # ── Discord ───────────────────────────────────────────────────────────
-    "Discord Bot Token": {
-        "regex": r"(?:Bot\s+)?([MN][A-Za-z0-9]{23}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27,})",
-        "severity": "HIGH",
-        "category": "communication",
-        "verifier": "discord_token",
-        "description": "Discord Bot Token",
-    },
-    "Discord Webhook URL": {
-        "regex": r"https://(?:ptb\.|canary\.)?discord(?:app)?\.com/api/webhooks/[0-9]+/[A-Za-z0-9\-_]+",
-        "severity": "HIGH",
-        "category": "communication",
-        "verifier": None,
-        "description": "Discord Webhook URL",
-    },
-    # ── GitHub ────────────────────────────────────────────────────────────
     "GitHub Personal Access Token": {
         "regex": r"ghp_[A-Za-z0-9]{36}",
         "severity": "CRITICAL",
@@ -130,80 +138,34 @@ PATTERNS = {
         "verifier": "github_token",
         "description": "GitHub OAuth Token",
     },
-    "GitHub App Token": {
-        "regex": r"ghs_[A-Za-z0-9]{36}",
-        "severity": "CRITICAL",
-        "category": "vcs",
-        "verifier": "github_token",
-        "description": "GitHub App Installation Token",
-    },
-    "GitHub Fine-Grained PAT": {
-        "regex": r"github_pat_[A-Za-z0-9_]{82}",
-        "severity": "CRITICAL",
-        "category": "vcs",
-        "verifier": "github_token",
-        "description": "GitHub Fine-Grained Personal Access Token",
-    },
-    # ── Private Keys ──────────────────────────────────────────────────────
     "RSA Private Key": {
         "regex": r"-----BEGIN RSA PRIVATE KEY-----",
         "severity": "CRITICAL",
-        "category": "cryptography",
+        "category": "crypto",
         "verifier": None,
         "description": "RSA Private Key",
-    },
-    "EC Private Key": {
-        "regex": r"-----BEGIN EC PRIVATE KEY-----",
-        "severity": "CRITICAL",
-        "category": "cryptography",
-        "verifier": None,
-        "description": "EC (Elliptic Curve) Private Key",
     },
     "OpenSSH Private Key": {
         "regex": r"-----BEGIN OPENSSH PRIVATE KEY-----",
         "severity": "CRITICAL",
-        "category": "cryptography",
+        "category": "crypto",
         "verifier": None,
         "description": "OpenSSH Private Key",
     },
-    "PGP Private Key": {
-        "regex": r"-----BEGIN PGP PRIVATE KEY BLOCK-----",
+    "Slack Bot Token": {
+        "regex": r"xoxb-[0-9]{10,13}-[0-9]{10,13}-[a-zA-Z0-9]{24}",
+        "severity": "HIGH",
+        "category": "messaging",
+        "verifier": "slack_token",
+        "description": "Slack Bot Token",
+    },
+    "OpenAI API Key": {
+        "regex": r"sk-[A-Za-z0-9]{48}",
         "severity": "CRITICAL",
-        "category": "cryptography",
-        "verifier": None,
-        "description": "PGP Private Key Block",
+        "category": "ai-ml",
+        "verifier": "openai_key",
+        "description": "OpenAI API Key",
     },
-    # ── JWT ───────────────────────────────────────────────────────────────
-    "JWT Token": {
-        "regex": r"eyJ[A-Za-z0-9\-_]+\.eyJ[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+",
-        "severity": "MEDIUM",
-        "category": "authentication",
-        "verifier": None,
-        "description": "JSON Web Token (JWT)",
-    },
-    # ── Database ──────────────────────────────────────────────────────────
-    "PostgreSQL Connection String": {
-        "regex": r"postgres(?:ql)?://[^:]+:[^@]+@[^\s\"']+",
-        "severity": "CRITICAL",
-        "category": "database",
-        "verifier": None,
-        "description": "PostgreSQL Connection String with credentials",
-    },
-    "MySQL Connection String": {
-        "regex": r"mysql://[^:]+:[^@]+@[^\s\"']+",
-        "severity": "CRITICAL",
-        "category": "database",
-        "verifier": None,
-        "description": "MySQL Connection String with credentials",
-    },
-    "MongoDB Connection String": {
-        "regex": r"mongodb(?:\+srv)?://[^:]+:[^@]+@[^\s\"']+",
-        "severity": "CRITICAL",
-        "category": "database",
-        "verifier": None,
-        "description": "MongoDB Connection String with credentials",
-    },
-    # ── Email Services ────────────────────────────────────────────────────
     "SendGrid API Key": {
         "regex": r"SG\.[A-Za-z0-9\-_]{22}\.[A-Za-z0-9\-_]{43}",
         "severity": "HIGH",
@@ -211,82 +173,12 @@ PATTERNS = {
         "verifier": "sendgrid_key",
         "description": "SendGrid API Key",
     },
-    "Mailgun API Key": {
-        "regex": r"key-[0-9a-zA-Z]{32}",
-        "severity": "HIGH",
-        "category": "email",
-        "verifier": "mailgun_key",
-        "description": "Mailgun API Key",
-    },
-    # ── Firebase ──────────────────────────────────────────────────────────
-    "Firebase URL": {
-        "regex": r"https://[a-z0-9\-]+\.firebaseio\.com",
-        "severity": "MEDIUM",
-        "category": "cloud",
-        "verifier": None,
-        "description": "Firebase Realtime Database URL",
-    },
-    # ── Heroku ────────────────────────────────────────────────────────────
-    "Heroku API Key": {
-        "regex": r"(?i)heroku[_\-\s]*(?:api[_\-\s]*)?key[\s]*[=:\"']+\s*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})",
-        "severity": "HIGH",
-        "category": "cloud",
-        "verifier": None,
-        "description": "Heroku API Key",
-    },
-    # ── Shopify ───────────────────────────────────────────────────────────
-    "Shopify Access Token": {
-        "regex": r"shpat_[a-fA-F0-9]{32}",
-        "severity": "HIGH",
-        "category": "ecommerce",
-        "verifier": None,
-        "description": "Shopify Access Token",
-    },
-    "Shopify Private App Password": {
-        "regex": r"shppa_[a-fA-F0-9]{32}",
-        "severity": "HIGH",
-        "category": "ecommerce",
-        "verifier": None,
-        "description": "Shopify Private App Password",
-    },
-    # ── Telegram ──────────────────────────────────────────────────────────
-    "Telegram Bot Token": {
-        "regex": r"[0-9]{8,10}:[A-Za-z0-9_\-]{35}",
-        "severity": "HIGH",
-        "category": "communication",
-        "verifier": "telegram_token",
-        "description": "Telegram Bot API Token",
-    },
-    # ── Twitch ────────────────────────────────────────────────────────────
-    "Twitch OAuth Token": {
-        "regex": r"oauth:[a-z0-9]{30}",
-        "severity": "HIGH",
-        "category": "streaming",
-        "verifier": None,
-        "description": "Twitch OAuth Token",
-    },
-    # ── PayPal ────────────────────────────────────────────────────────────
-    "PayPal Client Secret": {
-        "regex": r"(?i)paypal[_\-\s]*(?:client[_\-\s]*)?secret[\s]*[=:\"']+\s*([A-Za-z0-9\-_]{40,80})",
-        "severity": "HIGH",
-        "category": "payment",
-        "verifier": None,
-        "description": "PayPal Client Secret",
-    },
-    # ── Generic secrets ───────────────────────────────────────────────────
     "Generic API Key": {
         "regex": r"(?i)api[_\-\s]*key[\s]*[=:\"']+\s*([A-Za-z0-9\-_]{20,80})",
         "severity": "MEDIUM",
         "category": "generic",
         "verifier": None,
         "description": "Generic API Key assignment",
-    },
-    "Generic Secret": {
-        "regex": r"(?i)(?:secret|private[_\-]key)[\s]*[=:\"']+\s*([A-Za-z0-9\-_/+]{20,80})",
-        "severity": "MEDIUM",
-        "category": "generic",
-        "verifier": None,
-        "description": "Generic secret/private key assignment",
     },
     "Generic Password": {
         "regex": r"(?i)password[\s]*[=:\"']+\s*([^\s\"']{8,80})",
@@ -295,27 +187,143 @@ PATTERNS = {
         "verifier": None,
         "description": "Generic password assignment",
     },
+    "PostgreSQL Connection String": {
+        "regex": r"postgres(?:ql)?://[^:]+:[^@]+@[^\s\"']+",
+        "severity": "CRITICAL",
+        "category": "database",
+        "verifier": None,
+        "description": "PostgreSQL connection string with credentials",
+    },
+    "MongoDB Connection String": {
+        "regex": r"mongodb(?:\+srv)?://[^:]+:[^@]+@[^\s\"']+",
+        "severity": "CRITICAL",
+        "category": "database",
+        "verifier": None,
+        "description": "MongoDB connection string with credentials",
+    },
 }
 
-# Files that should be prioritized / flagged even without pattern matches
-RISKY_FILENAMES = [
-    ".env",
-    ".env.local",
-    ".env.production",
-    ".env.staging",
-    ".pem",
-    ".key",
-    "id_rsa",
-    "id_ed25519",
-    "credentials.json",
-    "secrets.json",
-    "config.json",
-    "wp-config.php",
-    "settings.py",
-    "database.yml",
-    "secrets.yml",
-    ".p12",
-    ".pfx",
-    ".sqlite",
-    ".db",
-]
+# ── Runtime pattern store ─────────────────────────────────────────────────────
+# Loaded at module init; dict keyed by pattern name
+PATTERNS: Dict[str, Dict[str, Any]] = {}
+
+
+def _json_pattern_to_dict(p: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert JSON pattern entry to internal PATTERNS format."""
+    return {
+        "regex": p["regex"],
+        "severity": p.get("severity", "MEDIUM"),
+        "category": p.get("category", "generic"),
+        "verifier": p.get("verifier"),
+        "description": p.get("description", p.get("name", p.get("id", "Unknown"))),
+        "tags": p.get("tags", []),
+        "id": p.get("id", ""),
+    }
+
+
+def load_patterns() -> Dict[str, Dict[str, Any]]:
+    """
+    Load patterns from data/patterns_extended.json and merge with hardcoded fallback.
+    Returns merged dict keyed by pattern name.
+    """
+    global PATTERNS
+    merged: Dict[str, Dict[str, Any]] = {}
+
+    # 1. Try loading from JSON file
+    if _PATTERNS_JSON.exists():
+        try:
+            with open(_PATTERNS_JSON, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            for p in data.get("patterns", []):
+                name = p.get("name") or p.get("id", "unknown")
+                merged[name] = _json_pattern_to_dict(p)
+        except Exception as e:
+            import warnings
+            warnings.warn(f"Could not load patterns_extended.json: {e}", stacklevel=2)
+
+    # 2. Merge fallback (don't overwrite JSON-loaded ones)
+    for name, meta in _FALLBACK_PATTERNS.items():
+        if name not in merged:
+            merged[name] = {**meta, "tags": [], "id": ""}
+
+    PATTERNS = merged
+    return merged
+
+
+def get_patterns_by_category(category: str) -> Dict[str, Dict[str, Any]]:
+    """Return all patterns belonging to a given category."""
+    _ensure_loaded()
+    return {
+        name: meta
+        for name, meta in PATTERNS.items()
+        if meta.get("category", "") == category
+        or meta.get("category", "").startswith(category)
+    }
+
+
+def get_patterns_by_severity(severity: str) -> Dict[str, Dict[str, Any]]:
+    """Return all patterns with a given severity level."""
+    _ensure_loaded()
+    return {
+        name: meta
+        for name, meta in PATTERNS.items()
+        if meta.get("severity", "").upper() == severity.upper()
+    }
+
+
+def match_all(content: str) -> List[Dict[str, Any]]:
+    """
+    Run all loaded patterns against content.
+    Returns list of match dicts with full metadata.
+    Pre-filters using RISKY_CONTENT_SIGNALS for performance.
+    """
+    _ensure_loaded()
+
+    # Fast pre-filter: skip expensive regex if no signals present
+    lower_content = content.lower()
+    has_signal = any(s.lower() in lower_content for s in RISKY_CONTENT_SIGNALS)
+    if not has_signal:
+        return []
+
+    results: List[Dict[str, Any]] = []
+    lines = content.splitlines()
+
+    for pattern_name, meta in PATTERNS.items():
+        regex = meta["regex"]
+        try:
+            compiled = re.compile(regex)
+        except re.error:
+            continue
+
+        for line_no, line in enumerate(lines, start=1):
+            for m in compiled.finditer(line):
+                raw_match = m.group(0)
+                try:
+                    raw_match = m.group(1)
+                except IndexError:
+                    pass
+
+                preview = raw_match[:80] + ("..." if len(raw_match) > 80 else "")
+                results.append({
+                    "pattern_name": pattern_name,
+                    "match": raw_match,
+                    "match_preview": preview,
+                    "severity": meta.get("severity", "MEDIUM"),
+                    "category": meta.get("category", "generic"),
+                    "verifier": meta.get("verifier"),
+                    "description": meta.get("description", ""),
+                    "line_number": line_no,
+                    "line_content": line.strip()[:200],
+                })
+
+    return results
+
+
+def _ensure_loaded():
+    """Ensure patterns have been loaded at least once."""
+    if not PATTERNS:
+        load_patterns()
+
+
+# Auto-load on import
+load_patterns()

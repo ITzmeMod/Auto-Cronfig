@@ -1,6 +1,7 @@
 """
-Concurrent GitHub repo scanner for Auto-Cronfig v2.
-Scans repositories, users, or uses global code search.
+Concurrent GitHub repo scanner for Auto-Cronfig v3.
+Enhanced with false-positive checking, RISKY_CONTENT_SIGNALS pre-filter,
+tqdm progress for scan_user, and proper global_search rate limiting.
 """
 
 import re
@@ -19,9 +20,9 @@ try:
 except ImportError:
     HAS_TQDM = False
 
-from .patterns import PATTERNS, RISKY_FILENAMES
+from .patterns import PATTERNS, RISKY_FILENAMES, RISKY_CONTENT_SIGNALS
 
-# File extensions to always skip (binaries / lock files / irrelevant)
+# File extensions to always skip
 SKIP_EXTENSIONS = {
     ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".svg", ".webp",
     ".mp3", ".mp4", ".avi", ".mov", ".mkv", ".wav", ".flac",
@@ -30,6 +31,7 @@ SKIP_EXTENSIONS = {
     ".pyc", ".pyo", ".pyd", ".class", ".jar",
     ".woff", ".woff2", ".ttf", ".otf", ".eot",
     ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+    ".lock", ".sum",
 }
 
 SKIP_FILENAMES = {
@@ -61,7 +63,7 @@ class RawFinding:
 def _make_headers(token: Optional[str]) -> Dict[str, str]:
     headers = {
         "Accept": "application/vnd.github.v3+json",
-        "User-Agent": "Auto-Cronfig/2.0",
+        "User-Agent": "Auto-Cronfig/3.0",
     }
     if token:
         headers["Authorization"] = f"token {token}"
@@ -82,7 +84,7 @@ def _request_with_backoff(
                 method, url, headers=headers, params=params, timeout=15
             )
             if resp.status_code in (403, 429):
-                wait = (2 ** attempt) * 1
+                wait = (2 ** attempt) * 2
                 time.sleep(wait)
                 continue
             return resp
@@ -91,8 +93,24 @@ def _request_with_backoff(
     return None
 
 
-def _scan_text_for_patterns(text: str, repo: str, file_path: str, url: str) -> List[RawFinding]:
+def _has_content_signal(content: str) -> bool:
+    """Fast pre-filter: check for any RISKY_CONTENT_SIGNALS before regex scanning."""
+    lower = content.lower()
+    return any(s.lower() in lower for s in RISKY_CONTENT_SIGNALS)
+
+
+def _scan_text_for_patterns(
+    text: str,
+    repo: str,
+    file_path: str,
+    url: str,
+    memory=None,
+) -> List[RawFinding]:
     """Scan raw text content for all registered patterns."""
+    # Fast pre-filter
+    if not _has_content_signal(text):
+        return []
+
     findings: List[RawFinding] = []
     lines = text.splitlines()
 
@@ -107,11 +125,14 @@ def _scan_text_for_patterns(text: str, repo: str, file_path: str, url: str) -> L
         for line_no, line in enumerate(lines, start=1):
             for m in compiled.finditer(line):
                 raw_match = m.group(0)
-                # Use capture group 1 if it exists (for generic patterns)
                 try:
                     raw_match = m.group(1)
                 except IndexError:
                     pass
+
+                # Check false positives
+                if memory and memory.is_false_positive(raw_match, pattern_name):
+                    continue
 
                 preview = raw_match[:80] + ("..." if len(raw_match) > 80 else "")
                 findings.append(
@@ -177,8 +198,6 @@ class RepoScanner:
         if resp is None or resp.status_code != 200:
             return []
         data = resp.json()
-        if data.get("truncated"):
-            pass  # Best-effort; tree may be incomplete for huge repos
         return [item for item in data.get("tree", []) if item.get("type") == "blob"]
 
     def scan_repo(self, owner: str, repo_name: str) -> List[RawFinding]:
@@ -197,15 +216,15 @@ class RepoScanner:
             path = item["path"]
             base = path.split("/")[-1].lower()
             ext = _get_file_extension(path)
-            return ext in risky_exts or base in risky_basenames or any(
-                base.endswith(rf) for rf in RISKY_FILENAMES
+            return (
+                ext in risky_exts
+                or base in risky_basenames
+                or any(base.endswith(rf.lstrip(".").lower()) for rf in RISKY_FILENAMES)
             )
 
         priority = [f for f in tree if is_priority(f)]
         rest = [f for f in tree if not is_priority(f)]
         ordered = priority + rest
-
-        files_scanned = 0
 
         def scan_file(item) -> List[RawFinding]:
             path = item["path"]
@@ -218,23 +237,17 @@ class RepoScanner:
             ext = _get_file_extension(path)
             url = f"https://github.com/{owner}/{repo_name}/blob/HEAD/{path}"
             local_findings = _scan_text_for_patterns(
-                content, f"{owner}/{repo_name}", path, url
+                content, f"{owner}/{repo_name}", path, url, memory=self.memory
             )
             if self.memory:
                 self.memory.update_file_stats(ext, had_finding=len(local_findings) > 0)
             return local_findings
 
-        desc = f"Scanning {owner}/{repo_name}"
-        iterator = ordered
-        if HAS_TQDM:
-            iterator = tqdm(ordered, desc=desc, unit="file", leave=False)
-
         with ThreadPoolExecutor(max_workers=self.workers) as executor:
-            futures = {executor.submit(scan_file, item): item for item in iterator}
+            futures = {executor.submit(scan_file, item): item for item in ordered}
             for future in as_completed(futures):
                 try:
                     result = future.result()
-                    files_scanned += 1
                     with self._lock:
                         all_findings.extend(result)
                 except Exception:
@@ -243,7 +256,7 @@ class RepoScanner:
         return all_findings
 
     def scan_user(self, username: str) -> List[RawFinding]:
-        """Scan all public repos for a user."""
+        """Scan all public repos for a user, with tqdm progress."""
         all_findings: List[RawFinding] = []
         page = 1
         repos = []
@@ -262,8 +275,9 @@ class RepoScanner:
                 break
             page += 1
 
+        desc = f"Scanning repos for {username}"
         if HAS_TQDM:
-            repo_iter = tqdm(repos, desc=f"Scanning user: {username}", unit="repo")
+            repo_iter = tqdm(repos, desc=desc, unit="repo")
         else:
             repo_iter = repos
 
@@ -279,7 +293,7 @@ class RepoScanner:
         """
         Use GitHub code search API to find files containing query_term,
         then scan those files for secrets.
-        Handles the 10 req/min rate limit with sleep between calls.
+        Handles the 10 req/min rate limit with sleep(6) between calls.
         """
         all_findings: List[RawFinding] = []
         per_page = 30
@@ -297,7 +311,6 @@ class RepoScanner:
             if resp is None:
                 break
             if resp.status_code == 422:
-                print(f"[!] GitHub code search rejected query: {query_term}")
                 break
             if resp.status_code != 200:
                 break
@@ -307,35 +320,22 @@ class RepoScanner:
             if not items:
                 break
 
-            if HAS_TQDM:
-                items_iter = tqdm(
-                    items,
-                    desc=f"Global search: {query_term} (page {page})",
-                    unit="file",
-                    leave=False,
-                )
-            else:
-                items_iter = items
-
-            for item in items_iter:
+            for item in items:
                 if fetched >= max_results:
                     break
                 repo_full = item["repository"]["full_name"]
                 file_path = item["path"]
                 owner, repo_name = repo_full.split("/", 1)
 
-                # Fetch and scan the actual file content
                 content = self._fetch_file_content(owner, repo_name, file_path)
                 if content:
                     gh_url = item.get("html_url", f"https://github.com/{repo_full}/blob/HEAD/{file_path}")
                     findings = _scan_text_for_patterns(
-                        content, repo_full, file_path, gh_url
+                        content, repo_full, file_path, gh_url, memory=self.memory
                     )
                     all_findings.extend(findings)
                 fetched += 1
-
-                # Respect code search rate limit: sleep between requests
-                time.sleep(6)  # ~10 requests/min
+                time.sleep(6)  # Respect 10 req/min rate limit
 
             if fetched >= max_results:
                 break

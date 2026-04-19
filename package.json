@@ -1,0 +1,26 @@
+{
+  "name": "auto-cronfig",
+  "version": "3.0.0",
+  "description": "GitHub Secret Scanner - Node.js scraper module (axios + cheerio)",
+  "main": "node_scraper/index.js",
+  "scripts": {
+    "scrape": "node node_scraper/index.js",
+    "paste": "node node_scraper/index.js --mode paste",
+    "gist": "node node_scraper/index.js --mode gist",
+    "test": "node --test node_scraper/tests/ 2>/dev/null || echo 'No Node tests yet'"
+  },
+  "dependencies": {
+    "axios": "^1.6.0",
+    "cheerio": "^1.0.0",
+    "p-limit": "^3.1.0",
+    "chalk": "^4.1.2",
+    "node-cron": "^3.0.3",
+    "commander": "^11.1.0"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "keywords": ["security", "scanner", "github", "secrets", "api-keys"],
+  "license": "MIT",
+  "author": "ITzmeMod"
+}

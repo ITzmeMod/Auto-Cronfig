@@ -1,18 +1,24 @@
 """
-Main orchestration engine for Auto-Cronfig v2.
-Ties together scanning, verification, memory, and reporting.
+Main orchestration engine for Auto-Cronfig v3.
+Unified scan modes: FAST, STANDARD, DEEP, GLOBAL.
+Supports Node.js scraper subprocess integration.
 """
 
 import json
 import time
 import datetime
+import subprocess
+import shutil
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import List, Optional, Dict, Any
 from uuid import uuid4
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .memory import Memory
 from .scanner import RepoScanner, RawFinding
+from .deep_scanner import DeepScanner
+from .global_scanner import GlobalScanner
 from .verifier import verify, VerificationResult
 
 try:
@@ -43,6 +49,13 @@ STATUS_COLOR = {
     "ERROR": Fore.MAGENTA if HAS_COLOR else "",
     "PENDING": Fore.WHITE if HAS_COLOR else "",
 }
+
+
+class ScanMode(Enum):
+    FAST = "fast"        # Files only, no verification, max workers
+    STANDARD = "standard"  # Files + verification
+    DEEP = "deep"        # Files + commits + PRs + issues + gists + verification
+    GLOBAL = "global"    # GitHub code search across all public repos
 
 
 @dataclass
@@ -105,6 +118,7 @@ class ScanReport:
         }
 
     def to_html(self) -> str:
+        """Fallback HTML export (used when Jinja2 is not available)."""
         rows = []
         for ef in self.findings:
             sev = ef.raw.severity
@@ -128,64 +142,52 @@ class ScanReport:
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Auto-Cronfig Scan Report — {self.scan_id}</title>
+<title>Auto-Cronfig v3 Report — {self.scan_id}</title>
 <style>
-  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-         background: #0d1117; color: #e6edf3; margin: 0; padding: 20px; }}
+  body {{ font-family: sans-serif; background: #0d1117; color: #e6edf3; padding: 20px; }}
   h1 {{ color: #f78166; }} h2 {{ color: #79c0ff; border-bottom: 1px solid #30363d; padding-bottom: 8px; }}
-  .summary {{ background: #161b22; border: 1px solid #30363d; border-radius: 8px;
-              padding: 16px; display: flex; gap: 24px; flex-wrap: wrap; margin-bottom: 24px; }}
+  .summary {{ background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px;
+              display: flex; gap: 24px; flex-wrap: wrap; margin-bottom: 24px; }}
   .stat {{ text-align: center; }} .stat-val {{ font-size: 2em; font-weight: bold; color: #f78166; }}
   .stat-label {{ color: #8b949e; font-size: 0.85em; }}
   table {{ width: 100%; border-collapse: collapse; background: #161b22; border-radius: 8px; overflow: hidden; }}
   th {{ background: #21262d; padding: 10px 12px; text-align: left; color: #8b949e; font-size: 0.85em; }}
   td {{ padding: 8px 12px; border-top: 1px solid #21262d; font-size: 0.88em; }}
-  td a {{ color: #58a6ff; text-decoration: none; }} td a:hover {{ text-decoration: underline; }}
+  td a {{ color: #58a6ff; text-decoration: none; }}
   code {{ background: #0d1117; padding: 2px 6px; border-radius: 4px; font-size: 0.85em; }}
   .sev-critical {{ border-left: 3px solid #f85149; }}
   .sev-high {{ border-left: 3px solid #e3b341; }}
   .sev-medium {{ border-left: 3px solid #388bfd; }}
   .sev-low {{ border-left: 3px solid #56d364; }}
-  .sev-badge {{ font-weight: bold; }}
   .status-live {{ color: #f85149; font-weight: bold; }}
   .status-dead {{ color: #56d364; }}
   .status-unknown {{ color: #e3b341; }}
-  .status-error {{ color: #bc8cff; }}
-  ul.insights {{ background: #161b22; border: 1px solid #30363d; border-radius: 8px;
-                 padding: 16px 16px 16px 32px; }}
+  ul.insights {{ background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px 16px 16px 32px; }}
   ul.insights li {{ margin: 4px 0; color: #8b949e; }}
 </style>
 </head>
 <body>
-<h1>🔍 Auto-Cronfig Scan Report</h1>
+<h1>🔍 Auto-Cronfig v3 Scan Report</h1>
 <div class="summary">
   <div class="stat"><div class="stat-val">{self.scan_id}</div><div class="stat-label">Scan ID</div></div>
   <div class="stat"><div class="stat-val">{self.target}</div><div class="stat-label">Target</div></div>
-  <div class="stat"><div class="stat-val">{self.repos_scanned}</div><div class="stat-label">Repos Scanned</div></div>
+  <div class="stat"><div class="stat-val">{self.repos_scanned}</div><div class="stat-label">Repos</div></div>
   <div class="stat"><div class="stat-val">{len(self.findings)}</div><div class="stat-label">Findings</div></div>
-  <div class="stat" style="color:#f85149"><div class="stat-val">{len(self.live_keys)}</div><div class="stat-label">Live Keys!</div></div>
+  <div class="stat" style="color:#f85149"><div class="stat-val">{len(self.live_keys)}</div><div class="stat-label">Live Keys</div></div>
   <div class="stat"><div class="stat-val">{round(self.duration_seconds, 1)}s</div><div class="stat-label">Duration</div></div>
 </div>
-
-<h2>🔑 Findings</h2>
+<h2>Findings</h2>
 <table>
-<thead><tr>
-  <th>#</th><th>File</th><th>Pattern</th><th>Preview</th><th>Severity</th><th>Status</th><th>Verification Detail</th>
-</tr></thead>
+<thead><tr><th>#</th><th>File</th><th>Pattern</th><th>Preview</th><th>Severity</th><th>Status</th><th>Detail</th></tr></thead>
 <tbody>
 {"".join(rows) if rows else "<tr><td colspan='7' style='text-align:center;color:#8b949e'>No findings</td></tr>"}
 </tbody>
 </table>
-
-<h2>💡 Intelligence Insights</h2>
+<h2>Insights</h2>
 <ul class="insights">
-{insight_items if insight_items else "<li>Not enough data yet — scan more repos to build intelligence.</li>"}
+{insight_items if insight_items else "<li>Scan more repos to build intelligence.</li>"}
 </ul>
-
-<p style="color:#8b949e;font-size:0.8em;margin-top:32px">
-  Generated by <strong>Auto-Cronfig v2</strong> at {datetime.datetime.utcnow().isoformat()} UTC
-</p>
+<p style="color:#8b949e;font-size:0.8em;margin-top:32px">Generated by Auto-Cronfig v3 at {datetime.datetime.utcnow().isoformat()} UTC</p>
 </body>
 </html>"""
 
@@ -197,12 +199,18 @@ class AutoCronfig:
         workers: int = 8,
         verify_keys: bool = True,
         db_path: Optional[str] = None,
+        notifier=None,
+        use_node: bool = True,
     ):
         self.token = token
         self.workers = workers
         self.verify_keys = verify_keys
+        self.notifier = notifier
+        self.use_node = use_node
         self.memory = Memory(db_path)
         self.scanner = RepoScanner(token=token, workers=workers, memory=self.memory)
+        self.deep_scanner = DeepScanner(token=token, workers=workers, memory=self.memory)
+        self.global_scanner = GlobalScanner(token=token, memory=self.memory)
         self.scan_id = uuid4().hex[:8]
 
     def _auto_detect_type(self, target: str) -> str:
@@ -211,43 +219,118 @@ class AutoCronfig:
         return "user"
 
     def _parse_repo_target(self, target: str) -> tuple:
-        """Parse 'owner/repo' or full URL into (owner, repo_name)."""
         clean = target.replace("https://github.com/", "").strip("/")
         if "/" in clean:
             parts = clean.split("/")
             return parts[0], parts[1]
         raise ValueError(f"Cannot parse repo target: {target}")
 
-    def run(self, target: str, target_type: str = "auto") -> ScanReport:
+    def _run_node_scraper(self, mode: str, query: Optional[str] = None) -> List[Dict]:
+        """
+        Run Node.js scraper as a subprocess and parse NDJSON output.
+        Returns list of finding dicts. Silently returns [] if Node not available.
+        """
+        if not self.use_node:
+            return []
+
+        # Check if node is available
+        if not shutil.which("node"):
+            return []
+
+        # Check if node_scraper/index.js exists
+        import os
+        from pathlib import Path
+        scraper_path = Path(__file__).parent.parent / "node_scraper" / "index.js"
+        if not scraper_path.exists():
+            return []
+
+        cmd = ["node", str(scraper_path), "--mode", mode]
+        if query:
+            cmd += ["--query", query]
+
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                cwd=str(scraper_path.parent.parent),
+            )
+            findings = []
+            for line in result.stdout.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                    findings.append(obj)
+                except json.JSONDecodeError:
+                    pass
+            return findings
+        except Exception:
+            return []
+
+    def run(self, target: str, mode: ScanMode = ScanMode.STANDARD) -> ScanReport:
+        """
+        Unified run method. mode controls scan depth and verification.
+        """
         start_time = time.monotonic()
 
-        if target_type == "auto":
+        # Determine target type
+        if mode == ScanMode.GLOBAL:
+            target_type = "global"
+        else:
             target_type = self._auto_detect_type(target)
 
-        print(f"\n{'='*60}")
-        print(f"  Auto-Cronfig v2 | Scan ID: {self.scan_id}")
+        print(f"\n{'='*62}")
+        print(f"  Auto-Cronfig v3 | Scan ID: {self.scan_id} | Mode: {mode.value.upper()}")
         print(f"  Target: {target}  ({target_type})")
-        print(f"{'='*60}\n")
+        print(f"{'='*62}\n")
 
         raw_findings: List[RawFinding] = []
         repos_scanned = 0
-        files_scanned = 0
 
-        # 1. Scan
+        # ── Phase 1: File scan ─────────────────────────────────────────────────
         if target_type == "repo":
             owner, repo_name = self._parse_repo_target(target)
             raw_findings = self.scanner.scan_repo(owner, repo_name)
             repos_scanned = 1
         elif target_type == "user":
             raw_findings = self.scanner.scan_user(target)
-            repos_scanned = -1  # will be updated below
+            repos_scanned = len(set(f.repo for f in raw_findings))
         elif target_type == "global":
             raw_findings = self.scanner.global_search(target)
             repos_scanned = len(set(f.repo for f in raw_findings))
-        else:
-            raise ValueError(f"Unknown target_type: {target_type}")
 
-        # 2. Save findings to memory and prepare enriched list
+        print(f"[*] Phase 1 (file scan): {len(raw_findings)} findings")
+
+        # ── Phase 2: Deep scan (DEEP mode only) ────────────────────────────────
+        if mode == ScanMode.DEEP and target_type == "repo":
+            owner, repo_name = self._parse_repo_target(target)
+            print(f"[*] Phase 2 (deep scan: commits, PRs, issues, releases)...")
+            deep_findings = self.deep_scanner.full_deep_scan(owner, repo_name)
+            print(f"[*] Deep scan: {len(deep_findings)} additional findings")
+            raw_findings.extend(deep_findings)
+
+        # ── Phase 3: Node.js scraper (STANDARD/DEEP) ──────────────────────────
+        if mode in (ScanMode.STANDARD, ScanMode.DEEP) and self.use_node:
+            node_mode = "paste"
+            node_findings = self._run_node_scraper(node_mode)
+            if node_findings:
+                print(f"[*] Node.js scraper: {len(node_findings)} additional findings")
+                # Convert node findings to RawFinding objects
+                for nf in node_findings:
+                    raw_findings.append(RawFinding(
+                        repo=nf.get("source", "node-scraper"),
+                        file_path=nf.get("url", ""),
+                        pattern_name=nf.get("pattern", "Unknown"),
+                        match=nf.get("raw", ""),
+                        match_preview=nf.get("preview", "")[:80],
+                        severity="MEDIUM",
+                        url=nf.get("url", ""),
+                    ))
+
+        # ── Phase 4: Save to memory ────────────────────────────────────────────
         enriched: List[EnrichedFinding] = []
         for rf in raw_findings:
             fid = self.memory.save_finding(
@@ -261,8 +344,9 @@ class AutoCronfig:
             )
             enriched.append(EnrichedFinding(raw=rf, finding_id=fid))
 
-        # 3. Verify keys concurrently
-        if self.verify_keys and enriched:
+        # ── Phase 5: Verify keys ───────────────────────────────────────────────
+        do_verify = self.verify_keys and mode != ScanMode.FAST and enriched
+        if do_verify:
             print(f"\n[*] Verifying {len(enriched)} findings...")
             verify_workers = min(10, len(enriched))
             with ThreadPoolExecutor(max_workers=verify_workers) as executor:
@@ -275,42 +359,62 @@ class AutoCronfig:
                     try:
                         result = future.result()
                         ef.verification = result
-                        self.memory.update_verification(
-                            ef.finding_id, result.status, result.detail
-                        )
-                        self.memory.update_pattern_stats(
-                            ef.raw.pattern_name, result.status
-                        )
+                        self.memory.update_verification(ef.finding_id, result.status, result.detail)
+                        self.memory.update_pattern_stats(ef.raw.pattern_name, result.status)
+
+                        # Save live keys to vault
+                        if result.status == "LIVE":
+                            self.memory.save_leaked_key(
+                                scan_id=self.scan_id,
+                                repo=ef.raw.repo,
+                                file_path=ef.raw.file_path,
+                                pattern_name=ef.raw.pattern_name,
+                                raw_value=ef.raw.match,
+                                severity=ef.raw.severity,
+                                url=ef.raw.url,
+                                verified_status="LIVE",
+                                verified_detail=result.detail,
+                            )
                     except Exception as e:
                         ef.verification = VerificationResult(
                             status="ERROR",
                             detail=f"Verification crashed: {e}",
                         )
 
-        # 4. Separate live keys
-        live_keys = [ef for ef in enriched if ef.verified_status == "LIVE"]
-
-        # 5. Update pattern stats for unverified findings
         for ef in enriched:
             if ef.verification is None:
                 self.memory.update_pattern_stats(ef.raw.pattern_name, "UNKNOWN")
 
-        # 6. Save scan to history
+        live_keys = [ef for ef in enriched if ef.verified_status == "LIVE"]
+
+        # ── Phase 6: Notifications ─────────────────────────────────────────────
+        if self.notifier and enriched:
+            for ef in enriched:
+                finding_dict = {
+                    "severity": ef.raw.severity,
+                    "pattern_name": ef.raw.pattern_name,
+                    "match_preview": ef.raw.match_preview,
+                    "repo": ef.raw.repo,
+                    "url": ef.raw.url,
+                    "verified_status": ef.verified_status,
+                }
+                self.notifier.notify_finding(finding_dict, self.scan_id)
+
+        # ── Phase 7: Save scan to history ─────────────────────────────────────
         duration = time.monotonic() - start_time
         self.memory.save_scan(
             scan_id=self.scan_id,
             target=target,
             target_type=target_type,
             stats={
-                "repos_scanned": repos_scanned if repos_scanned >= 0 else len(set(f.repo for f in raw_findings)),
-                "files_scanned": files_scanned,
+                "repos_scanned": repos_scanned,
+                "files_scanned": 0,
                 "findings_count": len(enriched),
                 "live_keys_count": len(live_keys),
                 "duration_seconds": duration,
             },
         )
 
-        # 7. Get insights
         insights = self.memory.get_insights()
 
         report = ScanReport(
@@ -318,21 +422,53 @@ class AutoCronfig:
             target=target,
             target_type=target_type,
             duration_seconds=duration,
-            repos_scanned=repos_scanned if repos_scanned >= 0 else len(set(f.repo for f in raw_findings)),
-            files_scanned=files_scanned,
+            repos_scanned=repos_scanned,
+            files_scanned=0,
             findings=enriched,
             live_keys=live_keys,
             insights=insights,
         )
 
         self._print_report(report)
+
+        # Notify scan complete
+        if self.notifier:
+            self.notifier.notify_scan_complete(report)
+
         return report
 
+    def run_watchlist(self) -> List[ScanReport]:
+        """Scan all targets in the watchlist."""
+        watchlist = self.memory.get_watchlist()
+        reports = []
+
+        for item in watchlist:
+            target = item["target"]
+            target_type = item.get("target_type", "auto")
+            scan_mode_str = item.get("scan_mode", "fast")
+
+            mode_map = {
+                "fast": ScanMode.FAST,
+                "standard": ScanMode.STANDARD,
+                "deep": ScanMode.DEEP,
+                "global": ScanMode.GLOBAL,
+            }
+            mode = mode_map.get(scan_mode_str, ScanMode.FAST)
+
+            try:
+                report = self.run(target, mode=mode)
+                reports.append(report)
+                self.memory.update_watchlist_scan(target, len(report.findings))
+            except Exception as e:
+                print(f"[!] Failed to scan watchlist item {target}: {e}")
+
+        return reports
+
     def _print_report(self, report: ScanReport):
-        print(f"\n{'─'*60}")
+        print(f"\n{'─'*62}")
         print(f"  SCAN COMPLETE | ID: {report.scan_id}")
         print(f"  Duration: {report.duration_seconds:.1f}s")
-        print(f"{'─'*60}")
+        print(f"{'─'*62}")
         print(f"  Repos scanned : {report.repos_scanned}")
         print(f"  Findings      : {len(report.findings)}")
 
@@ -341,7 +477,7 @@ class AutoCronfig:
         if HAS_COLOR and live_count > 0:
             live_label = Fore.RED + live_label + Style.RESET_ALL
         print(f"  Live keys     : {live_label}")
-        print(f"{'─'*60}\n")
+        print(f"{'─'*62}\n")
 
         if report.findings:
             print("  Findings:\n")
