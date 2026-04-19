@@ -149,11 +149,14 @@ bash <(curl -fsSL https://raw.githubusercontent.com/ITzmeMod/Auto-Cronfig/main/i
 git clone https://github.com/ITzmeMod/Auto-Cronfig.git
 cd Auto-Cronfig
 
-# Python dependencies
+# Python dependencies (includes interactive menu)
 pip install -r requirements.txt
 
 # Node.js dependencies (optional — enables paste/web scraping)
 npm install
+
+# Launch interactive menu
+python menu.py
 ```
 
 ### Requirements
@@ -411,29 +414,54 @@ python scanner.py --user target --notify
 
 ## 📱 Android / Termux
 
-Run Auto-Cronfig on **any Android device** — no root required.
+Run Auto-Cronfig on **any Android device** — no root required — with the full interactive menu.
+
+### One-liner install (paste into Termux)
+
+> ⚠️ **Use Termux from [F-Droid](https://f-droid.org/) — NOT Google Play**
 
 ```bash
-# Step 1: Install Termux from F-Droid (NOT Google Play)
-# Step 2: Open Termux and run:
-
-pkg update -y && pkg install -y python git nodejs
 bash <(curl -fsSL https://raw.githubusercontent.com/ITzmeMod/Auto-Cronfig/main/install.sh)
 ```
 
-Performance tips for Android:
+This installs Python, Node.js, all dependencies, runs tests, and creates the `auto-cronfig` shortcut.
+
+### Launch the interactive menu
+
 ```bash
-# Mid-range phone (4 cores)
-python scanner.py --user target --token ghp_xxx --workers 4
-
-# High-end phone (8+ cores)
-python scanner.py --user target --token ghp_xxx --workers 8
-
-# Slow connection
-python scanner.py --user target --no-verify
+auto-cronfig
+# or:
+cd ~/Auto-Cronfig && python menu.py
 ```
 
-→ Full Android guide including cron scheduling and push notifications: **[TERMUX.md](TERMUX.md)**
+Navigate with `↑` `↓` arrow keys — no commands to memorize.
+
+### Manual install steps
+
+```bash
+# Install packages
+pkg update -y && pkg install -y python git nodejs curl
+
+# Clone & setup
+git clone https://github.com/ITzmeMod/Auto-Cronfig.git
+cd Auto-Cronfig
+pip install -r requirements.txt
+npm install
+
+# Launch menu
+python menu.py
+```
+
+### Performance tips
+
+| Phone type | Recommended flags |
+|------------|-------------------|
+| Mid-range (4 cores) | `--workers 4` |
+| High-end (8+ cores) | `--workers 8 --mode deep` |
+| Slow data connection | `--no-verify --workers 2` |
+| Always | `--token ghp_xxx` (5000 req/hr) |
+
+→ Full guide with cron scheduling, push notifications, troubleshooting: **[TERMUX.md](TERMUX.md)**
 
 ---
 
