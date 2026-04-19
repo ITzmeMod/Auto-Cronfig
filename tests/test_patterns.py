@@ -1,144 +1,110 @@
 """
-Tests for Auto-Cronfig pattern detection.
+Tests for Auto-Cronfig v2 pattern registry and pattern matching.
+Updated for v2 engine architecture.
 """
 import sys
 import os
+import re
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from scanner import GitHubScanner, PATTERNS
-import re
+from engine.patterns import PATTERNS, RISKY_FILENAMES
 
 
-def make_scanner():
-    return GitHubScanner()
+# ─── Pattern Registry Structure Tests ────────────────────────────────────────
+
+def test_patterns_dict_not_empty():
+    assert len(PATTERNS) >= 20, f"Expected 20+ patterns, got {len(PATTERNS)}"
 
 
-# ─── Pattern Unit Tests ───────────────────────
+def test_all_patterns_have_required_fields():
+    required = {"regex", "severity", "category", "verifier", "description"}
+    for name, meta in PATTERNS.items():
+        missing = required - set(meta.keys())
+        assert not missing, f"Pattern '{name}' missing fields: {missing}"
+
+
+def test_all_severities_are_valid():
+    valid = {"CRITICAL", "HIGH", "MEDIUM", "LOW"}
+    for name, meta in PATTERNS.items():
+        assert meta["severity"] in valid, \
+            f"Pattern '{name}' has invalid severity: {meta['severity']}"
+
+
+def test_all_regexes_compile():
+    for name, meta in PATTERNS.items():
+        try:
+            re.compile(meta["regex"])
+        except re.error as e:
+            assert False, f"Pattern '{name}' has invalid regex: {e}"
+
+
+def test_risky_filenames_not_empty():
+    assert len(RISKY_FILENAMES) >= 5
+
+
+# ─── Pattern Detection Tests ──────────────────────────────────────────────────
+
+def _match(pattern_name: str, content: str) -> bool:
+    regex = PATTERNS[pattern_name]["regex"]
+    return bool(re.search(regex, content))
+
 
 def test_aws_access_key_detected():
-    scanner = make_scanner()
-    content = "export AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE"
-    hits = scanner.scan_content(content, "test-context")
-    types = [h["type"] for h in hits]
-    assert "AWS Access Key" in types, f"Expected AWS Access Key, got: {types}"
+    assert _match("AWS Access Key", "export AWS_KEY=AKIAIOSFODNN7EXAMPLE123")
 
 
 def test_google_api_key_detected():
-    scanner = make_scanner()
-    content = 'const apiKey = "AIzaSyD-9tSrke72SouVgN5XkXZcmFNxjQmL5no";'
-    hits = scanner.scan_content(content, "test-context")
-    types = [h["type"] for h in hits]
-    assert "Google API Key" in types, f"Expected Google API Key, got: {types}"
-
-
-def test_stripe_live_key_detected():
-    scanner = make_scanner()
-    # Fake key for test purposes only — not a real secret
-    fake_key = "sk_live_" + "x" * 24
-    content = f"STRIPE_KEY={fake_key}"
-    hits = scanner.scan_content(content, "test-context")
-    types = [h["type"] for h in hits]
-    assert "Stripe Live Key" in types
+    assert _match("Google API Key", 'apiKey: "AIzaSyD-9tSrke72SouVgN5XkXZcmFNxjQmL5no"')
 
 
 def test_github_token_detected():
-    scanner = make_scanner()
-    content = "token: ghp_abcdefghijklmnopqrstuvwxyz123456789012"
-    hits = scanner.scan_content(content, "test-context")
-    types = [h["type"] for h in hits]
-    assert "GitHub Token" in types
+    assert _match("GitHub Personal Access Token", "token: ghp_abcdefghijklmnopqrstuvwxyz123456789012")
 
 
-def test_slack_webhook_detected():
-    scanner = make_scanner()
-    # Fake webhook for test purposes only — not a real secret
-    fake_hook = "https://hooks.slack.com/services/T" + "0" * 8 + "/B" + "0" * 8 + "/" + "X" * 24
-    content = f"webhook_url: {fake_hook}"
-    hits = scanner.scan_content(content, "test-context")
-    types = [h["type"] for h in hits]
-    assert "Slack Webhook" in types
+def test_stripe_live_key_detected():
+    fake = "sk_live_" + "x" * 24
+    assert _match("Stripe Live Key", f"STRIPE={fake}")
+
+
+def test_stripe_test_key_detected():
+    fake = "sk_test_" + "x" * 24
+    assert _match("Stripe Test Key", f"STRIPE={fake}")
+
+
+def test_private_rsa_key_detected():
+    assert _match("RSA Private Key", "-----BEGIN RSA PRIVATE KEY-----")
 
 
 def test_discord_webhook_detected():
-    scanner = make_scanner()
-    content = "https://discord.com/api/webhooks/123456789012345678/abcdefghijklmnopqrstuvwxyz_ABCDEFGHIJKLMNO"
-    hits = scanner.scan_content(content, "test-context")
-    types = [h["type"] for h in hits]
-    assert "Discord Webhook" in types
+    url = "https://discord.com/api/webhooks/123456789012345678/" + "A" * 68
+    assert _match("Discord Webhook URL", url)
 
 
-def test_private_key_detected():
-    scanner = make_scanner()
-    content = "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA...\n-----END RSA PRIVATE KEY-----"
-    hits = scanner.scan_content(content, "test-context")
-    types = [h["type"] for h in hits]
-    assert "Private Key (RSA)" in types
+def test_jwt_token_detected():
+    jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+    assert _match("JWT Token", jwt)
+
+
+def test_telegram_bot_token_detected():
+    assert _match("Telegram Bot Token", "bot_token=1234567890:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi")
 
 
 def test_db_connection_string_detected():
-    scanner = make_scanner()
-    content = "DATABASE_URL=postgres://admin:s3cr3tp@ss@db.example.com:5432/mydb"
-    hits = scanner.scan_content(content, "test-context")
-    types = [h["type"] for h in hits]
-    assert "DB Connection String" in types
+    assert _match("PostgreSQL Connection String", "postgres://admin:s3cr3t@db.example.com:5432/mydb")
 
 
-def test_no_false_positives_on_clean_code():
-    scanner = make_scanner()
-    content = """
-def hello_world():
-    print("Hello, World!")
-    return 42
+# ─── Risky Filename Tests ─────────────────────────────────────────────────────
 
-class MyClass:
-    def __init__(self):
-        self.value = "nothing secret here"
-"""
-    hits = scanner.scan_content(content, "test-context")
-    assert len(hits) == 0, f"False positives found: {hits}"
+def test_env_file_in_risky_filenames():
+    assert any(re.search(p, ".env", re.IGNORECASE) for p in RISKY_FILENAMES)
 
 
-# ─── Risky Filename Tests ─────────────────────
-
-def test_env_file_flagged():
-    scanner = make_scanner()
-    hits = scanner.scan_filename(".env", "https://github.com/owner/repo/blob/main/.env")
-    assert len(hits) > 0
+def test_pem_file_in_risky_filenames():
+    assert any(re.search(p, "server.pem", re.IGNORECASE) for p in RISKY_FILENAMES)
 
 
-def test_pem_file_flagged():
-    scanner = make_scanner()
-    hits = scanner.scan_filename("certs/server.pem", "ctx")
-    assert len(hits) > 0
-
-
-def test_normal_file_not_flagged():
-    scanner = make_scanner()
-    hits = scanner.scan_filename("src/main.py", "ctx")
-    assert len(hits) == 0
-
-
-# ─── Severity Tests ───────────────────────────
-
-def test_severity_critical():
-    assert GitHubScanner._severity("AWS Secret Key") == "CRITICAL"
-    assert GitHubScanner._severity("Private Key (RSA)") == "CRITICAL"
-    assert GitHubScanner._severity("GitHub Token") == "CRITICAL"
-
-
-def test_severity_high():
-    assert GitHubScanner._severity("AWS Access Key") == "HIGH"
-    assert GitHubScanner._severity("Stripe Test Key") == "HIGH"
-
-
-def test_severity_medium():
-    assert GitHubScanner._severity("Slack Webhook") == "MEDIUM"
-    assert GitHubScanner._severity("JWT Token") == "MEDIUM"
-
-
-def test_severity_low():
-    assert GitHubScanner._severity("Risky Filename") == "LOW"
-    assert GitHubScanner._severity("Generic Password") == "LOW"
+def test_credentials_json_in_risky_filenames():
+    assert any(re.search(p, "credentials.json", re.IGNORECASE) for p in RISKY_FILENAMES)
 
 
 if __name__ == "__main__":

@@ -4,6 +4,8 @@
 
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Android/Termux](https://img.shields.io/badge/Android-Termux%20Ready-brightgreen.svg)](TERMUX.md)
+[![Tests](https://img.shields.io/badge/tests-41%20passing-brightgreen.svg)](tests/)
 
 ---
 
@@ -56,6 +58,19 @@ AutoCronfig.run(target)
 
 ## Installation
 
+### 🖥️ Linux / macOS / WSL (one-liner)
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/ITzmeMod/Auto-Cronfig/main/install.sh)
+```
+
+### 📱 Android (Termux) — No Root Required
+```bash
+# In Termux:
+bash <(curl -fsSL https://raw.githubusercontent.com/ITzmeMod/Auto-Cronfig/main/install.sh)
+```
+See **[TERMUX.md](TERMUX.md)** for the full Android guide.
+
+### 🛠️ Manual
 ```bash
 git clone https://github.com/ITzmeMod/Auto-Cronfig.git
 cd Auto-Cronfig
@@ -191,6 +206,20 @@ All tests use mocked HTTP calls and in-memory SQLite — no real API keys needed
 ## License
 
 MIT — see [LICENSE](LICENSE)
+
+---
+
+## Platform Support
+
+| Platform | Supported | Notes |
+|----------|-----------|-------|
+| Linux | ✅ | Full support |
+| macOS | ✅ | Full support |
+| Windows (WSL) | ✅ | Recommended over native |
+| Android (Termux) | ✅ | No root needed — see [TERMUX.md](TERMUX.md) |
+| Android (Rooted) | ✅ | Same as non-rooted, both work |
+| Chromebook | ✅ | Via Linux container or Termux |
+| iOS (a-Shell) | ⚠️ | Limited, no cron support |
 
 ---
 
